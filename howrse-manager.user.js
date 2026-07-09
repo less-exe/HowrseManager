@@ -1,130 +1,325 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.1.0
-// @description  Умный менеджер табуна для Ловади / Howrse. v0.1: каркас приложения, интерфейс, настройки, лог.
+// @version      0.2.0
+// @description  Умный менеджер табуна для Ловади / Howrse. v0.2: интерфейс, настройки, лог, анализ страницы и текущей лошади.
 // @author       less-exe
 // @match        https://www.lowadi.com/*
 // @match        http://www.lowadi.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=lowadi.com
 // @grant        none
 // ==/UserScript==
 
-(function () {
+(() => {
     'use strict';
 
     const APP = {
         id: 'howrse-manager',
-        name: 'Howrse Manager',
-        version: '0.1.0',
-        storagePrefix: 'hm:v0.1',
+        rootId: 'hm-root',
+        version: '0.2.0',
+        storagePrefix: 'hm.',
+        supportedHost: 'www.lowadi.com'
     };
 
-    const PageType = Object.freeze({
-        HORSE: 'horse',
-        HORSE_LIST: 'horse_list',
-        UNKNOWN: 'unknown',
-    });
-
-    const AppStatus = Object.freeze({
-        IDLE: 'idle',
-        RUNNING: 'running',
-        PAUSED: 'paused',
-        STOPPED: 'stopped',
-        ERROR: 'error',
-    });
-
-    const settingsSchema = [
-        {
-            id: 'appearance',
-            title: 'Внешний вид',
-            description: 'Тема и поведение окна приложения.',
-            fields: [
-                {
-                    id: 'theme',
-                    type: 'select',
-                    label: 'Тема',
-                    default: 'auto',
-                    options: [
-                        { value: 'auto', label: 'Авто' },
-                        { value: 'light', label: 'Светлая' },
-                        { value: 'dark', label: 'Тёмная' },
-                    ],
-                },
-                {
-                    id: 'compactMode',
-                    type: 'checkbox',
-                    label: 'Компактный режим',
-                    default: false,
-                },
-            ],
+    const DEFAULT_SETTINGS = {
+        version: 2,
+        ui: {
+            theme: 'auto',
+            collapsed: false,
+            activePage: 'home'
         },
-        {
-            id: 'run',
+        delays: {
+            mode: 'medium',
+            min: 700,
+            max: 1600
+        },
+        run: {
+            mode: 'hybrid',
+            stopAfterCurrentHorse: false,
+            maxErrorsInRow: 10
+        },
+        care: {
+            brush: true,
+            lesson: true,
+            activity: true,
+            stroke: true,
+            water: true,
+            feed: true,
+            sleep: true,
+            minEnergyPercent: 20,
+            finishActivityAtEnergyPercent: 20
+        },
+        activity: {
+            mode: 'auto',
+            trainings: true,
+            rides: true,
+            competitions: false
+        },
+        ec: {
+            autoRegister: false,
+            maxPrice: 20,
+            duration: 3,
+            searchMode: 'smart',
+            requirements: {
+                fodder: true,
+                oats: true,
+                carrot: true,
+                shower: false,
+                vet: false,
+                forge: false,
+                largeBoxes: false,
+                meadow: false
+            }
+        },
+        blacklist: {
+            foals: true,
+            pregnant: true,
+            breeders: false,
+            vip: false,
+            onSale: true,
+            coverings: false,
+            blackMarketItems: false
+        },
+        developer: {
+            enabled: true,
+            showSelectors: true,
+            autoRefresh: true
+        }
+    };
+
+    const SETTINGS_SCHEMA = {
+        run: {
             title: 'Прогон',
-            description: 'Базовые настройки будущего прогона табуна.',
+            description: 'Базовая последовательность будущего прогона табуна.',
             fields: [
-                {
-                    id: 'stopAfterCurrentHorse',
-                    type: 'checkbox',
-                    label: 'Мягкая остановка после текущей лошади',
-                    default: false,
-                },
-                {
-                    id: 'energyLimit',
-                    type: 'number',
-                    label: 'Остаток энергии для активности, %',
-                    default: 20,
-                    min: 0,
-                    max: 100,
-                    step: 1,
-                },
-            ],
+                { path: 'care.brush', type: 'checkbox', label: 'Чистка' },
+                { path: 'care.lesson', type: 'checkbox', label: 'Урок' },
+                { path: 'care.activity', type: 'checkbox', label: 'Активность' },
+                { path: 'care.stroke', type: 'checkbox', label: 'Ласка' },
+                { path: 'care.water', type: 'checkbox', label: 'Вода' },
+                { path: 'care.feed', type: 'checkbox', label: 'Корм' },
+                { path: 'care.sleep', type: 'checkbox', label: 'Сон' },
+                { path: 'care.minEnergyPercent', type: 'number', label: 'Не выполнять действия если энергия ниже', min: 0, max: 100, suffix: '%' },
+                { path: 'care.finishActivityAtEnergyPercent', type: 'number', label: 'Заканчивать активность при энергии', min: 0, max: 100, suffix: '%' }
+            ]
         },
-        {
-            id: 'developer',
+        activity: {
+            title: 'Активность',
+            description: 'Тренировки, прогулки и соревнования. В v0.2 только настройки, без кликов.',
+            fields: [
+                { path: 'activity.mode', type: 'select', label: 'Режим', options: [
+                    { value: 'auto', label: 'Авто' },
+                    { value: 'manual', label: 'Ручной' }
+                ] },
+                { path: 'activity.trainings', type: 'checkbox', label: 'Тренировки' },
+                { path: 'activity.rides', type: 'checkbox', label: 'Прогулки' },
+                { path: 'activity.competitions', type: 'checkbox', label: 'Соревнования' }
+            ]
+        },
+        ec: {
+            title: 'КСК',
+            description: 'Заготовка будущего умного поиска КСК.',
+            fields: [
+                { path: 'ec.autoRegister', type: 'checkbox', label: 'Автоматическая запись' },
+                { path: 'ec.maxPrice', type: 'number', label: 'Максимальная цена', min: 0, max: 10000, suffix: 'экю/день' },
+                { path: 'ec.duration', type: 'select', label: 'Длительность', options: [
+                    { value: 3, label: '3 дня' },
+                    { value: 10, label: '10 дней' },
+                    { value: 30, label: '30 дней' },
+                    { value: 60, label: '60 дней' }
+                ] },
+                { path: 'ec.searchMode', type: 'select', label: 'Поведение поиска', options: [
+                    { value: 'strict', label: 'Строгий поиск' },
+                    { value: 'smart', label: 'Умный поиск' }
+                ] },
+                { path: 'ec.requirements.fodder', type: 'checkbox', label: 'Фураж' },
+                { path: 'ec.requirements.oats', type: 'checkbox', label: 'Овёс' },
+                { path: 'ec.requirements.carrot', type: 'checkbox', label: 'Морковь' },
+                { path: 'ec.requirements.shower', type: 'checkbox', label: 'Душ' },
+                { path: 'ec.requirements.vet', type: 'checkbox', label: 'Ветеринар' },
+                { path: 'ec.requirements.forge', type: 'checkbox', label: 'Кузница' },
+                { path: 'ec.requirements.largeBoxes', type: 'checkbox', label: 'Большие стойла' },
+                { path: 'ec.requirements.meadow', type: 'checkbox', label: 'Пастбище' }
+            ]
+        },
+        blacklist: {
+            title: 'Чёрный список',
+            description: 'Кого пропускать при будущем табунном прогоне.',
+            fields: [
+                { path: 'blacklist.foals', type: 'checkbox', label: 'Жеребята' },
+                { path: 'blacklist.pregnant', type: 'checkbox', label: 'Беременные' },
+                { path: 'blacklist.breeders', type: 'checkbox', label: 'Производители' },
+                { path: 'blacklist.vip', type: 'checkbox', label: 'VIP' },
+                { path: 'blacklist.onSale', type: 'checkbox', label: 'Лошади в продаже' },
+                { path: 'blacklist.coverings', type: 'checkbox', label: 'Лошади на случке' },
+                { path: 'blacklist.blackMarketItems', type: 'checkbox', label: 'Лошади с предметами ЧР' }
+            ]
+        },
+        settings: {
+            title: 'Настройки',
+            description: 'Общие настройки приложения.',
+            fields: [
+                { path: 'ui.theme', type: 'select', label: 'Тема', options: [
+                    { value: 'auto', label: 'Авто' },
+                    { value: 'dark', label: 'Тёмная' },
+                    { value: 'light', label: 'Светлая' }
+                ] },
+                { path: 'delays.mode', type: 'select', label: 'Случайные задержки', options: [
+                    { value: 'fast', label: 'Быстро' },
+                    { value: 'medium', label: 'Средне' },
+                    { value: 'slow', label: 'Медленно' },
+                    { value: 'custom', label: 'Свои значения' }
+                ] },
+                { path: 'delays.min', type: 'number', label: 'Минимальная задержка', min: 100, max: 30000, suffix: 'мс' },
+                { path: 'delays.max', type: 'number', label: 'Максимальная задержка', min: 100, max: 60000, suffix: 'мс' },
+                { path: 'run.stopAfterCurrentHorse', type: 'checkbox', label: 'Мягкая остановка после текущей лошади' },
+                { path: 'run.maxErrorsInRow', type: 'number', label: 'Остановиться после ошибок подряд', min: 1, max: 100 }
+            ]
+        },
+        developer: {
             title: 'Разработчик',
-            description: 'Помогает тестировать поиск страниц и будущих игровых элементов.',
+            description: 'Инструменты диагностики. В финальной версии можно будет скрыть.',
             fields: [
-                {
-                    id: 'enabled',
-                    type: 'checkbox',
-                    label: 'Включить режим разработчика',
-                    default: true,
-                },
-            ],
-        },
+                { path: 'developer.enabled', type: 'checkbox', label: 'Включить режим разработчика' },
+                { path: 'developer.showSelectors', type: 'checkbox', label: 'Показывать найденные селекторы' },
+                { path: 'developer.autoRefresh', type: 'checkbox', label: 'Автообновление анализа страницы' }
+            ]
+        }
+    };
+
+    const MENU = [
+        { id: 'home', label: 'Главная', icon: '🏠' },
+        { id: 'run', label: 'Прогон', icon: '🐴' },
+        { id: 'activity', label: 'Активность', icon: '🏇' },
+        { id: 'ec', label: 'КСК', icon: '🏡' },
+        { id: 'blacklist', label: 'Чёрный список', icon: '🚫' },
+        { id: 'statistics', label: 'Статистика', icon: '📊' },
+        { id: 'developer', label: 'Разработчик', icon: '🧪' },
+        { id: 'settings', label: 'Настройки', icon: '⚙️' }
     ];
+
+    const SELECTORS = {
+        horseName: [
+            '#horseName',
+            '#chevalNom',
+            '#nom-cheval',
+            '.horse-name',
+            '.cheval-name',
+            '.chevalNom',
+            '[data-testid="horse-name"]',
+            'h1'
+        ],
+        nextHorse: [
+            '#nav-next',
+            '#horse-next',
+            '#cheval-suivant',
+            '#boutonSuivant',
+            'a[href*="cheval"][title*="След"]',
+            'a[href*="cheval"][title*="suivant" i]',
+            'a[href*="cheval"][title*="next" i]',
+            'a[href*="cheval"] img[alt*="След" i]',
+            'a[href*="cheval"] img[alt*="suivant" i]'
+        ],
+        energy: ['#energie', '#energy', '.energie', '.energy', '[data-energy]'],
+        health: ['#sante', '#health', '.sante', '.health', '[data-health]'],
+        morale: ['#moral', '#morale', '.moral', '.morale', '[data-morale]'],
+        age: ['#age', '.age', '[data-age]'],
+        gender: ['#sexe', '#gender', '.sexe', '.gender', '[data-gender]']
+    };
+
+    class Utils {
+        static nowTime() {
+            return new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        static escapeHtml(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
+        static clone(value) {
+            return JSON.parse(JSON.stringify(value));
+        }
+
+        static deepMerge(target, source) {
+            const result = Utils.clone(target);
+            const merge = (left, right) => {
+                Object.keys(right || {}).forEach((key) => {
+                    if (right[key] && typeof right[key] === 'object' && !Array.isArray(right[key])) {
+                        if (!left[key] || typeof left[key] !== 'object') left[key] = {};
+                        merge(left[key], right[key]);
+                    } else {
+                        left[key] = right[key];
+                    }
+                });
+            };
+            merge(result, source);
+            return result;
+        }
+
+        static getPath(object, path) {
+            return path.split('.').reduce((acc, key) => (acc ? acc[key] : undefined), object);
+        }
+
+        static setPath(object, path, value) {
+            const keys = path.split('.');
+            let cursor = object;
+            keys.slice(0, -1).forEach((key) => {
+                if (!cursor[key] || typeof cursor[key] !== 'object') cursor[key] = {};
+                cursor = cursor[key];
+            });
+            cursor[keys[keys.length - 1]] = value;
+        }
+
+        static text(element) {
+            return (element?.textContent || element?.getAttribute?.('title') || element?.getAttribute?.('alt') || '').replace(/\s+/g, ' ').trim();
+        }
+
+        static parsePercent(text) {
+            if (!text) return null;
+            const normalized = String(text).replace(',', '.');
+            const percent = normalized.match(/(-?\d+(?:\.\d+)?)\s*%/);
+            if (percent) return Number(percent[1]);
+            const simple = normalized.match(/(?:^|\D)(\d{1,3})(?:\D|$)/);
+            if (!simple) return null;
+            const value = Number(simple[1]);
+            return value >= 0 && value <= 100 ? value : null;
+        }
+
+        static safeJsonParse(value, fallback) {
+            try {
+                return value ? JSON.parse(value) : fallback;
+            } catch (error) {
+                return fallback;
+            }
+        }
+    }
 
     class EventBus {
         constructor() {
             this.listeners = new Map();
         }
 
-        on(eventName, callback) {
-            if (!this.listeners.has(eventName)) {
-                this.listeners.set(eventName, new Set());
-            }
-
-            this.listeners.get(eventName).add(callback);
-
-            return () => this.off(eventName, callback);
+        on(event, callback) {
+            if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+            this.listeners.get(event).add(callback);
+            return () => this.off(event, callback);
         }
 
-        off(eventName, callback) {
-            const callbacks = this.listeners.get(eventName);
-            if (!callbacks) return;
-            callbacks.delete(callback);
+        off(event, callback) {
+            this.listeners.get(event)?.delete(callback);
         }
 
-        emit(eventName, payload) {
-            const callbacks = this.listeners.get(eventName);
-            if (!callbacks) return;
-
-            callbacks.forEach((callback) => {
+        emit(event, payload) {
+            this.listeners.get(event)?.forEach((callback) => {
                 try {
                     callback(payload);
                 } catch (error) {
-                    console.error(`[${APP.name}] Event handler error`, error);
+                    console.error('[Howrse Manager] Event error:', event, error);
                 }
             });
         }
@@ -136,1225 +331,995 @@
         }
 
         key(name) {
-            return `${this.prefix}:${name}`;
+            return `${this.prefix}${name}`;
         }
 
         get(name, fallback = null) {
-            try {
-                const value = window.localStorage.getItem(this.key(name));
-                return value === null ? fallback : JSON.parse(value);
-            } catch (error) {
-                console.warn(`[${APP.name}] Failed to read storage key: ${name}`, error);
-                return fallback;
-            }
+            return Utils.safeJsonParse(localStorage.getItem(this.key(name)), fallback);
         }
 
         set(name, value) {
-            try {
-                window.localStorage.setItem(this.key(name), JSON.stringify(value));
-            } catch (error) {
-                console.warn(`[${APP.name}] Failed to write storage key: ${name}`, error);
-            }
+            localStorage.setItem(this.key(name), JSON.stringify(value));
         }
 
         remove(name) {
-            window.localStorage.removeItem(this.key(name));
+            localStorage.removeItem(this.key(name));
         }
     }
 
     class Logger {
-        constructor(eventBus, storage) {
-            this.eventBus = eventBus;
+        constructor(storage, bus) {
             this.storage = storage;
-            this.maxItems = 250;
-            this.items = this.storage.get('log', []);
+            this.bus = bus;
+            this.items = this.storage.get('logs', []);
         }
 
-        add(level, message, details = null) {
+        add(level, message, meta = {}) {
             const item = {
                 id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                time: Utils.nowTime(),
                 level,
                 message,
-                details,
+                meta
             };
-
             this.items.unshift(item);
-            this.items = this.items.slice(0, this.maxItems);
-            this.storage.set('log', this.items);
-            this.eventBus.emit('log:changed', this.items);
+            this.items = this.items.slice(0, 250);
+            this.storage.set('logs', this.items);
+            this.bus.emit('log:updated', this.items);
+            return item;
         }
 
-        info(message, details = null) {
-            this.add('info', message, details);
-        }
-
-        success(message, details = null) {
-            this.add('success', message, details);
-        }
-
-        warn(message, details = null) {
-            this.add('warn', message, details);
-        }
-
-        error(message, details = null) {
-            this.add('error', message, details);
-        }
+        info(message, meta) { return this.add('info', message, meta); }
+        success(message, meta) { return this.add('success', message, meta); }
+        warn(message, meta) { return this.add('warn', message, meta); }
+        error(message, meta) { return this.add('error', message, meta); }
 
         clear() {
             this.items = [];
-            this.storage.set('log', this.items);
-            this.eventBus.emit('log:changed', this.items);
-        }
-
-        all() {
-            return [...this.items];
+            this.storage.set('logs', this.items);
+            this.info('Лог очищен');
         }
     }
 
     class SettingsManager {
-        constructor(eventBus, storage, schema) {
-            this.eventBus = eventBus;
+        constructor(storage, bus) {
             this.storage = storage;
-            this.schema = schema;
-            this.defaults = this.createDefaults(schema);
-            this.settings = this.load();
+            this.bus = bus;
+            this.settings = Utils.deepMerge(DEFAULT_SETTINGS, this.storage.get('settings', {}));
+            this.settings.version = DEFAULT_SETTINGS.version;
+            this.save(false);
         }
 
-        createDefaults(schema) {
-            const defaults = { version: 1 };
-
-            schema.forEach((section) => {
-                defaults[section.id] = {};
-                section.fields.forEach((field) => {
-                    defaults[section.id][field.id] = field.default;
-                });
-            });
-
-            return defaults;
+        get(path = null) {
+            return path ? Utils.getPath(this.settings, path) : this.settings;
         }
 
-        load() {
-            const saved = this.storage.get('settings', {});
-            return this.mergeDeep(this.defaults, saved);
+        set(path, value) {
+            Utils.setPath(this.settings, path, value);
+            this.save(true);
         }
 
-        mergeDeep(base, override) {
-            const output = Array.isArray(base) ? [...base] : { ...base };
-
-            Object.keys(override || {}).forEach((key) => {
-                if (override[key] && typeof override[key] === 'object' && !Array.isArray(override[key])) {
-                    output[key] = this.mergeDeep(output[key] || {}, override[key]);
-                } else {
-                    output[key] = override[key];
-                }
-            });
-
-            return output;
-        }
-
-        get(sectionId, fieldId = null) {
-            if (!fieldId) return this.settings[sectionId];
-            return this.settings?.[sectionId]?.[fieldId];
-        }
-
-        set(sectionId, fieldId, value) {
-            if (!this.settings[sectionId]) {
-                this.settings[sectionId] = {};
-            }
-
-            this.settings[sectionId][fieldId] = value;
+        save(notify = true) {
             this.storage.set('settings', this.settings);
-            this.eventBus.emit('settings:changed', this.settings);
+            if (notify) this.bus.emit('settings:updated', this.settings);
         }
 
         reset() {
-            this.settings = this.createDefaults(this.schema);
-            this.storage.set('settings', this.settings);
-            this.eventBus.emit('settings:changed', this.settings);
-        }
-
-        all() {
-            return this.settings;
+            this.settings = Utils.clone(DEFAULT_SETTINGS);
+            this.save(true);
         }
     }
 
     class StateManager {
-        constructor(eventBus, storage) {
-            this.eventBus = eventBus;
-            this.storage = storage;
-            this.state = this.storage.get('state', this.createInitialState());
-        }
-
-        createInitialState() {
-            return {
-                status: AppStatus.IDLE,
-                currentHorseId: null,
+        constructor(bus) {
+            this.bus = bus;
+            this.state = {
+                status: 'stopped',
                 currentHorseName: '—',
-                currentOperation: 'Ожидание',
-                progress: {
-                    current: 0,
-                    total: 0,
-                },
+                currentOperation: 'Остановлено',
+                progressCurrent: 0,
+                progressTotal: 0,
                 startedAt: null,
-                lastActionAt: null,
-                pageType: PageType.UNKNOWN,
+                elapsedSeconds: 0,
+                errorsInRow: 0,
+                pageInfo: null,
+                horseInfo: null
             };
+            this.timer = null;
         }
 
         get() {
-            return { ...this.state, progress: { ...this.state.progress } };
+            return this.state;
         }
 
         patch(partial) {
-            this.state = {
-                ...this.state,
-                ...partial,
-                progress: {
-                    ...this.state.progress,
-                    ...(partial.progress || {}),
-                },
-            };
-
-            this.storage.set('state', this.state);
-            this.eventBus.emit('state:changed', this.get());
+            this.state = { ...this.state, ...partial };
+            this.bus.emit('state:updated', this.state);
         }
 
         start() {
             this.patch({
-                status: AppStatus.RUNNING,
-                currentOperation: 'Запуск приложения',
-                startedAt: this.state.startedAt || Date.now(),
-                lastActionAt: Date.now(),
+                status: 'running',
+                currentOperation: 'Анализ страницы',
+                startedAt: this.state.startedAt || Date.now()
             });
+            this.startTimer();
         }
 
         pause() {
-            this.patch({
-                status: AppStatus.PAUSED,
-                currentOperation: 'Пауза',
-                lastActionAt: Date.now(),
-            });
+            this.patch({ status: 'paused', currentOperation: 'Пауза' });
         }
 
         stop() {
             this.patch({
-                status: AppStatus.STOPPED,
+                status: 'stopped',
                 currentOperation: 'Остановлено',
-                lastActionAt: Date.now(),
+                startedAt: null,
+                elapsedSeconds: 0
             });
+            this.stopTimer();
+        }
+
+        startTimer() {
+            if (this.timer) return;
+            this.timer = window.setInterval(() => {
+                if (this.state.startedAt && this.state.status !== 'stopped') {
+                    this.patch({ elapsedSeconds: Math.floor((Date.now() - this.state.startedAt) / 1000) });
+                }
+            }, 1000);
+        }
+
+        stopTimer() {
+            if (this.timer) window.clearInterval(this.timer);
+            this.timer = null;
         }
     }
 
     class DelayManager {
-        constructor(settingsManager) {
-            this.settingsManager = settingsManager;
+        constructor(settings) {
+            this.settings = settings;
         }
 
-        wait(ms) {
-            return new Promise((resolve) => window.setTimeout(resolve, ms));
+        getRange() {
+            const mode = this.settings.get('delays.mode');
+            if (mode === 'fast') return [250, 700];
+            if (mode === 'slow') return [1800, 4000];
+            if (mode === 'custom') return [this.settings.get('delays.min'), this.settings.get('delays.max')];
+            return [700, 1600];
         }
 
-        random(min = 300, max = 900) {
-            const duration = Math.floor(Math.random() * (max - min + 1)) + min;
-            return this.wait(duration);
+        random() {
+            const [min, max] = this.getRange();
+            return Math.round(min + Math.random() * Math.max(0, max - min));
         }
     }
 
     class RouteManager {
-        getCurrentPageType() {
-            const path = window.location.pathname;
-            const href = window.location.href;
+        getCurrentPage() {
+            const { hostname, pathname, href } = window.location;
+            const normalized = pathname.toLowerCase();
+            let type = 'unknown';
+            let label = 'Неизвестная страница';
 
-            if (/chevaux|elevage|horse|fiche|fichecheval/i.test(path) || /id=\d+/i.test(href)) {
-                return PageType.HORSE;
+            if (hostname !== APP.supportedHost) {
+                type = 'unsupported';
+                label = 'Неподдерживаемый домен';
+            } else if (/\/elevage\/chevaux\/?$/.test(normalized)) {
+                type = 'horseList';
+                label = 'Список лошадей';
+            } else if (normalized.includes('/elevage/chevaux/cheval') || href.includes('cheval?id=') || href.includes('id=')) {
+                type = 'horse';
+                label = 'Страница лошади';
+            } else if (normalized.includes('/centre') || normalized.includes('/elevage/centre')) {
+                type = 'ec';
+                label = 'КСК';
+            } else if (normalized.includes('/competition')) {
+                type = 'competition';
+                label = 'Соревнования';
+            } else if (normalized === '/' || normalized.includes('/jouer')) {
+                type = 'home';
+                label = 'Главная игры';
             }
 
-            if (/elevage|chevaux|liste|horse-list|my-horses/i.test(path)) {
-                return PageType.HORSE_LIST;
-            }
-
-            return PageType.UNKNOWN;
-        }
-    }
-
-    class GameAdapter {
-        constructor(routeManager) {
-            this.routeManager = routeManager;
-        }
-
-        getName() {
-            return 'BaseAdapter';
-        }
-
-        isSupported() {
-            return false;
-        }
-
-        getPageInfo() {
             return {
-                hostname: window.location.hostname,
-                url: window.location.href,
-                pageType: this.routeManager.getCurrentPageType(),
-                adapter: this.getName(),
-                supported: this.isSupported(),
+                host: hostname,
+                path: pathname,
+                url: href,
+                type,
+                label,
+                isSupported: hostname === APP.supportedHost,
+                isHorsePage: type === 'horse',
+                isHorseList: type === 'horseList'
             };
         }
     }
 
-    class LowadiAdapter extends GameAdapter {
-        getName() {
-            return 'LowadiAdapter';
+    class SelectorManager {
+        constructor(selectors) {
+            this.selectors = selectors;
         }
 
-        isSupported() {
-            return window.location.hostname === 'www.lowadi.com';
+        find(key) {
+            const variants = this.selectors[key] || [];
+            for (const selector of variants) {
+                try {
+                    const element = document.querySelector(selector);
+                    if (element) return { element, selector };
+                } catch (error) {
+                    // ignore invalid selector variant
+                }
+            }
+            return { element: null, selector: null };
+        }
+
+        findAllTextByWords(words) {
+            const result = [];
+            const nodes = [...document.querySelectorAll('body *')].slice(0, 4000);
+            const lowerWords = words.map((word) => word.toLowerCase());
+
+            for (const node of nodes) {
+                const text = Utils.text(node);
+                if (!text || text.length > 180) continue;
+                const lower = text.toLowerCase();
+                if (lowerWords.some((word) => lower.includes(word))) {
+                    result.push({ element: node, text });
+                }
+                if (result.length >= 20) break;
+            }
+            return result;
+        }
+
+        findClickableByWords(words) {
+            const candidates = [...document.querySelectorAll('a, button, input[type="button"], input[type="submit"], [role="button"]')];
+            const lowerWords = words.map((word) => word.toLowerCase());
+
+            for (const element of candidates) {
+                const text = `${Utils.text(element)} ${element.getAttribute('title') || ''} ${element.getAttribute('alt') || ''}`.toLowerCase();
+                if (lowerWords.some((word) => text.includes(word))) {
+                    return { element, selector: this.describeElement(element), text: Utils.text(element) || element.getAttribute('title') || element.getAttribute('alt') };
+                }
+            }
+            return { element: null, selector: null, text: null };
+        }
+
+        describeElement(element) {
+            if (!element) return null;
+            const tag = element.tagName.toLowerCase();
+            if (element.id) return `${tag}#${element.id}`;
+            if (element.className && typeof element.className === 'string') {
+                const classes = element.className.trim().split(/\s+/).slice(0, 3).join('.');
+                if (classes) return `${tag}.${classes}`;
+            }
+            const title = element.getAttribute('title');
+            if (title) return `${tag}[title="${title.slice(0, 40)}"]`;
+            return tag;
+        }
+    }
+
+    class HorseParser {
+        constructor(selectorManager) {
+            this.selectors = selectorManager;
+        }
+
+        parse() {
+            const name = this.parseName();
+            const energy = this.parseMetric('energy', ['энерг', 'energie', 'energy']);
+            const health = this.parseMetric('health', ['здоров', 'santé', 'sante', 'health']);
+            const morale = this.parseMetric('morale', ['морал', 'moral', 'morale']);
+            const age = this.parseTextMetric('age', ['возраст', 'âge', 'age']);
+            const gender = this.parseTextMetric('gender', ['пол', 'sexe', 'gender', 'жереб', 'кобыл']);
+            const nextHorse = this.parseNextHorseButton();
+
+            const foundSomething = Boolean(name.value || energy.value !== null || health.value !== null || morale.value !== null || age.value || gender.value || nextHorse.found);
+
+            return {
+                found: foundSomething,
+                name: name.value || '—',
+                energy: energy.value,
+                health: health.value,
+                morale: morale.value,
+                age: age.value || '—',
+                gender: gender.value || '—',
+                nextHorseButton: nextHorse,
+                selectors: {
+                    name: name.selector,
+                    energy: energy.selector,
+                    health: health.selector,
+                    morale: morale.selector,
+                    age: age.selector,
+                    gender: gender.selector,
+                    nextHorse: nextHorse.selector
+                },
+                raw: {
+                    name: name.raw,
+                    energy: energy.raw,
+                    health: health.raw,
+                    morale: morale.raw,
+                    age: age.raw,
+                    gender: gender.raw,
+                    nextHorse: nextHorse.text
+                }
+            };
+        }
+
+        parseName() {
+            const direct = this.selectors.find('horseName');
+            if (direct.element) {
+                const text = Utils.text(direct.element);
+                if (text && text.length <= 80 && !text.toLowerCase().includes('howrse manager')) {
+                    return { value: text, selector: direct.selector, raw: text };
+                }
+            }
+
+            const title = document.title.replace(/\s*-\s*Ловади.*$/i, '').replace(/\s*-\s*Howrse.*$/i, '').trim();
+            if (title && title.length <= 80) {
+                return { value: title, selector: 'document.title', raw: document.title };
+            }
+            return { value: null, selector: null, raw: null };
+        }
+
+        parseMetric(selectorKey, labelWords) {
+            const direct = this.selectors.find(selectorKey);
+            if (direct.element) {
+                const raw = Utils.text(direct.element) || direct.element.getAttribute('data-value') || direct.element.getAttribute(`data-${selectorKey}`);
+                const value = Utils.parsePercent(raw);
+                if (value !== null) return { value, selector: direct.selector, raw };
+            }
+
+            const labelMatches = this.selectors.findAllTextByWords(labelWords);
+            for (const match of labelMatches) {
+                const value = Utils.parsePercent(match.text);
+                if (value !== null) return { value, selector: this.selectors.describeElement(match.element), raw: match.text };
+
+                const nearby = this.findNearbyPercent(match.element);
+                if (nearby.value !== null) return nearby;
+            }
+            return { value: null, selector: null, raw: null };
+        }
+
+        parseTextMetric(selectorKey, labelWords) {
+            const direct = this.selectors.find(selectorKey);
+            if (direct.element) {
+                const raw = Utils.text(direct.element);
+                const value = this.cleanupLabelValue(raw, labelWords);
+                if (value) return { value, selector: direct.selector, raw };
+            }
+
+            const labelMatches = this.selectors.findAllTextByWords(labelWords);
+            for (const match of labelMatches) {
+                const value = this.cleanupLabelValue(match.text, labelWords);
+                if (value) return { value, selector: this.selectors.describeElement(match.element), raw: match.text };
+
+                const nearbyText = this.findNearbyText(match.element, labelWords);
+                if (nearbyText.value) return nearbyText;
+            }
+            return { value: null, selector: null, raw: null };
+        }
+
+        parseNextHorseButton() {
+            const direct = this.selectors.find('nextHorse');
+            if (direct.element) {
+                const link = direct.element.closest?.('a') || direct.element;
+                return {
+                    found: true,
+                    selector: direct.selector,
+                    text: Utils.text(link) || link.getAttribute('title') || link.getAttribute('href') || 'найдена',
+                    href: link.getAttribute('href') || null
+                };
+            }
+
+            const byText = this.selectors.findClickableByWords(['след', 'suivant', 'next', 'cheval suivant']);
+            if (byText.element) {
+                return {
+                    found: true,
+                    selector: byText.selector,
+                    text: byText.text || 'найдена',
+                    href: byText.element.getAttribute('href') || null
+                };
+            }
+            return { found: false, selector: null, text: null, href: null };
+        }
+
+        findNearbyPercent(element) {
+            const candidates = [
+                element.nextElementSibling,
+                element.previousElementSibling,
+                element.parentElement,
+                element.parentElement?.nextElementSibling,
+                element.parentElement?.parentElement
+            ].filter(Boolean);
+
+            for (const candidate of candidates) {
+                const raw = Utils.text(candidate);
+                const value = Utils.parsePercent(raw);
+                if (value !== null) {
+                    return { value, selector: this.selectors.describeElement(candidate), raw };
+                }
+            }
+            return { value: null, selector: null, raw: null };
+        }
+
+        findNearbyText(element, labelWords) {
+            const candidates = [
+                element.nextElementSibling,
+                element.previousElementSibling,
+                element.parentElement,
+                element.parentElement?.nextElementSibling,
+                element.parentElement?.parentElement
+            ].filter(Boolean);
+
+            for (const candidate of candidates) {
+                const raw = Utils.text(candidate);
+                const value = this.cleanupLabelValue(raw, labelWords);
+                if (value) {
+                    return { value, selector: this.selectors.describeElement(candidate), raw };
+                }
+            }
+            return { value: null, selector: null, raw: null };
+        }
+
+        cleanupLabelValue(text, labelWords) {
+            if (!text) return null;
+            let value = String(text).replace(/\s+/g, ' ').trim();
+            for (const word of labelWords) {
+                value = value.replace(new RegExp(word, 'ig'), '').trim();
+            }
+            value = value.replace(/^[:：\-–—\s]+/, '').trim();
+            if (!value || value.length > 80) return null;
+            if (/^[:：\-–—]*$/.test(value)) return null;
+            return value;
+        }
+    }
+
+    class LowadiAdapter {
+        constructor() {
+            this.route = new RouteManager();
+            this.selectorManager = new SelectorManager(SELECTORS);
+            this.horseParser = new HorseParser(this.selectorManager);
+        }
+
+        analyzePage() {
+            const page = this.route.getCurrentPage();
+            const horse = page.isHorsePage ? this.horseParser.parse() : this.trySoftHorseParse(page);
+            return {
+                adapter: 'LowadiAdapter',
+                page,
+                horse,
+                timestamp: Date.now()
+            };
+        }
+
+        trySoftHorseParse(page) {
+            if (!page.isSupported) {
+                return { found: false, name: '—', energy: null, health: null, morale: null, age: '—', gender: '—', nextHorseButton: { found: false }, selectors: {}, raw: {} };
+            }
+            if (page.isHorseList) {
+                return { found: false, name: '—', energy: null, health: null, morale: null, age: '—', gender: '—', nextHorseButton: { found: false }, selectors: {}, raw: {} };
+            }
+            return this.horseParser.parse();
         }
     }
 
     class AdapterFactory {
-        static create(routeManager) {
-            const hostname = window.location.hostname;
-
-            if (hostname === 'www.lowadi.com') {
-                return new LowadiAdapter(routeManager);
-            }
-
-            return new GameAdapter(routeManager);
+        static create() {
+            if (window.location.hostname === APP.supportedHost) return new LowadiAdapter();
+            return null;
         }
     }
 
     class UIManager {
-        constructor({ eventBus, logger, settingsManager, stateManager, adapter }) {
-            this.eventBus = eventBus;
+        constructor({ bus, settings, state, logger, adapter }) {
+            this.bus = bus;
+            this.settings = settings;
+            this.state = state;
             this.logger = logger;
-            this.settingsManager = settingsManager;
-            this.stateManager = stateManager;
             this.adapter = adapter;
-            this.activePage = 'home';
-            this.host = null;
+            this.activePage = settings.get('ui.activePage') || 'home';
+            this.analysis = null;
             this.root = null;
-            this.drag = null;
-            this.pages = [
-                { id: 'home', icon: '🏠', label: 'Главная' },
-                { id: 'run', icon: '🐴', label: 'Прогон' },
-                { id: 'activity', icon: '🏇', label: 'Активность' },
-                { id: 'ec', icon: '🏡', label: 'КСК' },
-                { id: 'blacklist', icon: '🚫', label: 'Чёрный список' },
-                { id: 'stats', icon: '📊', label: 'Статистика' },
-                { id: 'developer', icon: '🧪', label: 'Разработчик' },
-                { id: 'settings', icon: '⚙', label: 'Настройки' },
-            ];
+            this.shadow = null;
+            this.refreshTimer = null;
         }
 
         mount() {
-            if (document.getElementById(`${APP.id}-root`)) return;
+            if (document.getElementById(APP.rootId)) return;
 
-            this.host = document.createElement('div');
-            this.host.id = `${APP.id}-root`;
-            document.documentElement.appendChild(this.host);
-            this.root = this.host.attachShadow({ mode: 'open' });
+            this.root = document.createElement('div');
+            this.root.id = APP.rootId;
+            document.documentElement.appendChild(this.root);
+            this.shadow = this.root.attachShadow({ mode: 'open' });
+
             this.render();
-            this.bindEvents();
-
-            this.eventBus.on('state:changed', () => this.render());
-            this.eventBus.on('settings:changed', () => this.render());
-            this.eventBus.on('log:changed', () => this.render());
+            this.bindBus();
+            this.runAnalysis('initial');
+            this.startAutoRefresh();
         }
 
-        getTheme() {
-            const theme = this.settingsManager.get('appearance', 'theme');
-            if (theme !== 'auto') return theme;
+        bindBus() {
+            this.bus.on('settings:updated', () => {
+                this.render();
+                this.startAutoRefresh();
+            });
+            this.bus.on('state:updated', () => this.render());
+            this.bus.on('log:updated', () => this.render());
+        }
 
-            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-            return prefersDark ? 'dark' : 'light';
+        startAutoRefresh() {
+            if (this.refreshTimer) window.clearInterval(this.refreshTimer);
+            if (!this.settings.get('developer.autoRefresh')) return;
+            this.refreshTimer = window.setInterval(() => {
+                this.runAnalysis('auto', false);
+            }, 3000);
+        }
+
+        setActivePage(page) {
+            this.activePage = page;
+            this.settings.set('ui.activePage', page);
+            this.render();
+        }
+
+        runAnalysis(source = 'manual', log = true) {
+            if (!this.adapter) {
+                this.analysis = {
+                    adapter: 'Нет адаптера',
+                    page: new RouteManager().getCurrentPage(),
+                    horse: { found: false, name: '—' }
+                };
+            } else {
+                this.analysis = this.adapter.analyzePage();
+            }
+
+            const horse = this.analysis.horse || {};
+            const page = this.analysis.page || {};
+            this.state.patch({
+                pageInfo: page,
+                horseInfo: horse,
+                currentHorseName: horse.name || '—'
+            });
+
+            if (log) {
+                this.logger.info(`Анализ страницы: ${page.label || 'неизвестно'}`);
+                if (horse?.found) this.logger.success(`Лошадь найдена: ${horse.name || 'без имени'}`);
+                if (page?.isHorsePage && !horse?.found) this.logger.warn('Страница похожа на лошадь, но данные пока не найдены');
+            }
+            if (source !== 'auto') this.render();
+        }
+
+        getThemeClass() {
+            const theme = this.settings.get('ui.theme');
+            if (theme === 'dark') return 'hm-theme-dark';
+            if (theme === 'light') return 'hm-theme-light';
+            const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+            return prefersDark ? 'hm-theme-dark' : 'hm-theme-light';
         }
 
         render() {
-            const settings = this.settingsManager.all();
-            const compactClass = settings.appearance.compactMode ? 'hm-compact' : '';
-            const savedUi = this.settingsManager.storage.get('ui', { x: null, y: null, minimized: false });
-            const positionStyle = savedUi.x !== null && savedUi.y !== null
-                ? `left: ${savedUi.x}px; top: ${savedUi.y}px; right: auto; bottom: auto;`
-                : '';
-
-            this.root.innerHTML = `
+            if (!this.shadow) return;
+            const collapsed = this.settings.get('ui.collapsed');
+            const theme = this.getThemeClass();
+            this.shadow.innerHTML = `
                 <style>${this.styles()}</style>
-                <div class="hm-app hm-theme-${this.getTheme()} ${compactClass} ${savedUi.minimized ? 'hm-minimized' : ''}" style="${positionStyle}">
-                    <div class="hm-shell">
-                        <aside class="hm-sidebar">
-                            <div class="hm-brand hm-drag-handle" title="Можно перетащить окно">
-                                <div class="hm-brand-icon">🐴</div>
-                                <div>
-                                    <div class="hm-brand-title">Howrse Manager</div>
-                                    <div class="hm-brand-subtitle">v${APP.version}</div>
-                                </div>
-                            </div>
-                            <nav class="hm-nav">
-                                ${this.pages.map((page) => this.renderNavItem(page)).join('')}
-                            </nav>
-                        </aside>
-                        <main class="hm-content">
-                            <header class="hm-header hm-drag-handle">
-                                <div>
-                                    <div class="hm-kicker">Tampermonkey application</div>
-                                    <h1>${this.getActivePageTitle()}</h1>
-                                </div>
-                                <div class="hm-window-actions">
-                                    <button class="hm-icon-button" data-action="toggle-theme" title="Сменить тему">${this.getTheme() === 'dark' ? '🌙' : '☀'}</button>
-                                    <button class="hm-icon-button" data-action="toggle-minimize" title="Свернуть">${savedUi.minimized ? '□' : '—'}</button>
-                                </div>
-                            </header>
-                            <section class="hm-page">
-                                ${this.renderPage()}
-                            </section>
-                        </main>
-                    </div>
+                <div class="hm-app ${theme} ${collapsed ? 'hm-collapsed' : ''}">
+                    ${collapsed ? this.renderBubble() : this.renderPanel()}
                 </div>
             `;
-
-            this.bindDynamicEvents();
+            this.bindDomEvents();
         }
 
-        renderNavItem(page) {
+        renderBubble() {
+            return `<button class="hm-bubble" data-action="expand" title="Открыть Howrse Manager">🐴</button>`;
+        }
+
+        renderPanel() {
+            const pageConfig = MENU.find((item) => item.id === this.activePage) || MENU[0];
             return `
-                <button class="hm-nav-item ${this.activePage === page.id ? 'hm-active' : ''}" data-page="${page.id}">
-                    <span>${page.icon}</span>
-                    <span>${page.label}</span>
-                </button>
+                <section class="hm-panel" aria-label="Howrse Manager">
+                    <aside class="hm-sidebar">
+                        <div class="hm-brand">
+                            <div class="hm-logo">🐴</div>
+                            <div>
+                                <div class="hm-title">Howrse Manager</div>
+                                <div class="hm-version">v${APP.version}</div>
+                            </div>
+                        </div>
+                        <nav class="hm-menu">
+                            ${MENU.map((item) => `
+                                <button class="hm-menu-item ${item.id === this.activePage ? 'is-active' : ''}" data-page="${item.id}">
+                                    <span>${item.icon}</span><span>${item.label}</span>
+                                </button>
+                            `).join('')}
+                        </nav>
+                    </aside>
+                    <main class="hm-main">
+                        <header class="hm-header">
+                            <div>
+                                <div class="hm-kicker">Tampermonkey application</div>
+                                <h1>${pageConfig.icon} ${pageConfig.label}</h1>
+                            </div>
+                            <div class="hm-header-actions">
+                                <button class="hm-icon-btn" data-action="toggle-theme" title="Сменить тему">${this.getThemeIcon()}</button>
+                                <button class="hm-icon-btn" data-action="collapse" title="Свернуть">−</button>
+                            </div>
+                        </header>
+                        <section class="hm-content">
+                            ${this.renderPage()}
+                        </section>
+                    </main>
+                </section>
             `;
         }
 
-        getActivePageTitle() {
-            const page = this.pages.find((item) => item.id === this.activePage);
-            return page ? `${page.icon} ${page.label}` : APP.name;
+        getThemeIcon() {
+            const theme = this.settings.get('ui.theme');
+            if (theme === 'dark') return '🌙';
+            if (theme === 'light') return '☀️';
+            return '💻';
         }
 
         renderPage() {
-            const renderers = {
-                home: () => this.renderHomePage(),
-                run: () => this.renderRunPage(),
-                activity: () => this.renderActivityPage(),
-                ec: () => this.renderEcPage(),
-                blacklist: () => this.renderBlacklistPage(),
-                stats: () => this.renderStatsPage(),
-                developer: () => this.renderDeveloperPage(),
-                settings: () => this.renderSettingsPage(),
-            };
-
-            return (renderers[this.activePage] || renderers.home)();
+            if (this.activePage === 'home') return this.renderHome();
+            if (this.activePage === 'statistics') return this.renderStatistics();
+            if (this.activePage === 'developer') return this.renderDeveloper();
+            const schema = SETTINGS_SCHEMA[this.activePage];
+            if (schema) return this.renderSettingsPage(schema);
+            return `<div class="hm-card"><h2>Раздел в разработке</h2></div>`;
         }
 
-        renderHomePage() {
-            const state = this.stateManager.get();
-            const runtime = state.startedAt ? this.formatDuration(Date.now() - state.startedAt) : '00:00';
-
+        renderHome() {
+            const state = this.state.get();
+            const horse = state.horseInfo || {};
+            const page = state.pageInfo || {};
             return `
                 <div class="hm-grid hm-grid-2">
-                    <div class="hm-card">
-                        <div class="hm-card-title">Состояние</div>
-                        <div class="hm-status-row">
-                            <span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span>
-                            <span class="hm-muted">Время: ${runtime}</span>
+                    <div class="hm-card hm-status-card">
+                        <h2>Состояние</h2>
+                        <div class="hm-status-line">
+                            <span class="hm-pill hm-pill-${state.status}">${this.statusLabel(state.status)}</span>
+                            <span>Время: ${this.formatSeconds(state.elapsedSeconds)}</span>
                         </div>
-                        <div class="hm-info-list">
-                            <div><span>Текущая лошадь</span><strong>${this.escapeHtml(state.currentHorseName || '—')}</strong></div>
-                            <div><span>Операция</span><strong>${this.escapeHtml(state.currentOperation || '—')}</strong></div>
-                            <div><span>Прогресс</span><strong>${state.progress.current} / ${state.progress.total}</strong></div>
+                        <div class="hm-facts">
+                            <div><span>Страница</span><strong>${Utils.escapeHtml(page.label || '—')}</strong></div>
+                            <div><span>Текущая лошадь</span><strong>${Utils.escapeHtml(horse.name || '—')}</strong></div>
+                            <div><span>Операция</span><strong>${Utils.escapeHtml(state.currentOperation)}</strong></div>
+                            <div><span>Прогресс</span><strong>${state.progressCurrent} / ${state.progressTotal}</strong></div>
                         </div>
-                        <div class="hm-actions">
-                            <button class="hm-button hm-primary" data-action="start">Старт</button>
-                            <button class="hm-button" data-action="pause">Пауза</button>
-                            <button class="hm-button hm-danger" data-action="stop">Стоп</button>
+                        ${this.renderHorseMiniCard(horse)}
+                        <div class="hm-actions-row">
+                            <button class="hm-btn hm-primary" data-action="start">Старт</button>
+                            <button class="hm-btn" data-action="pause">Пауза</button>
+                            <button class="hm-btn hm-danger" data-action="stop">Стоп</button>
+                            <button class="hm-btn hm-ghost" data-action="analyze">Анализ</button>
                         </div>
                     </div>
-                    <div class="hm-card hm-card-accent">
-                        <div class="hm-card-title">v0.1 готовит фундамент</div>
-                        <p>Эта версия пока не кликает по игре. Она проверяет интерфейс, сохранение настроек, лог и базовую архитектуру.</p>
-                        <p class="hm-muted">Следующий этап: анализ страницы и текущей лошади.</p>
+                    <div class="hm-card hm-hero-card">
+                        <h2>v0.2 анализирует страницу</h2>
+                        <p>Эта версия уже пытается определить тип страницы, текущую лошадь, энергию, здоровье, мораль, возраст, пол и кнопку следующей лошади.</p>
+                        <p class="hm-muted">Она всё ещё не кликает по игре. Это безопасный диагностический этап перед табунным режимом.</p>
                     </div>
                 </div>
-                ${this.renderLogPanel()}
+                ${this.renderLogCard()}
             `;
         }
 
-        renderRunPage() {
+        renderHorseMiniCard(horse) {
             return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Прогон табуна</div>
-                    <p>Будущий гибридный режим: текущая лошадь → обработка → кнопка следующей лошади.</p>
-                    <div class="hm-note">В v0.1 это только страница настроек. Игровые действия появятся в следующих версиях.</div>
-                    ${this.renderSettingsSection('run')}
-                </div>
-            `;
-        }
-
-        renderActivityPage() {
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Активность</div>
-                    <p>Здесь позже появятся тренировки, прогулки, соревнования и умный режим выбора действия.</p>
-                    <div class="hm-empty">Пока модуль в режиме заготовки.</div>
-                </div>
-            `;
-        }
-
-        renderEcPage() {
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">КСК</div>
-                    <p>Здесь позже будет автоматическая запись в конноспортивный центр с умным поиском.</p>
-                    <div class="hm-empty">Модуль будет добавлен после базового прогона.</div>
-                </div>
-            `;
-        }
-
-        renderBlacklistPage() {
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Чёрный список</div>
-                    <p>Здесь будут правила пропуска: жеребята, беременные, VIP, лошади в продаже и другие исключения.</p>
-                    <div class="hm-empty">Правила появятся вместе с анализом лошади.</div>
-                </div>
-            `;
-        }
-
-        renderStatsPage() {
-            const logItems = this.logger.all();
-            const errors = logItems.filter((item) => item.level === 'error').length;
-
-            return `
-                <div class="hm-grid hm-grid-3">
-                    <div class="hm-stat"><span>Обработано</span><strong>0</strong></div>
-                    <div class="hm-stat"><span>Действий</span><strong>0</strong></div>
-                    <div class="hm-stat"><span>Ошибок</span><strong>${errors}</strong></div>
-                </div>
-                <div class="hm-card">
-                    <div class="hm-card-title">Статистика</div>
-                    <p>В v0.1 статистика показывает только базовые данные. После подключения действий здесь появятся тренировки, КСК, ошибки и время работы.</p>
-                </div>
-            `;
-        }
-
-        renderDeveloperPage() {
-            const pageInfo = this.adapter.getPageInfo();
-            const developerEnabled = this.settingsManager.get('developer', 'enabled');
-
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Режим разработчика</div>
-                    ${this.renderSettingsSection('developer')}
-                    ${developerEnabled ? `
-                        <div class="hm-dev-grid">
-                            <div><span>Домен</span><strong>${this.escapeHtml(pageInfo.hostname)}</strong></div>
-                            <div><span>URL</span><strong>${this.escapeHtml(pageInfo.url)}</strong></div>
-                            <div><span>Тип страницы</span><strong>${this.escapeHtml(pageInfo.pageType)}</strong></div>
-                            <div><span>Адаптер</span><strong>${this.escapeHtml(pageInfo.adapter)}</strong></div>
-                            <div><span>Поддерживается</span><strong>${pageInfo.supported ? 'Да' : 'Нет'}</strong></div>
-                        </div>
-                    ` : '<div class="hm-empty">Режим разработчика выключен.</div>'}
-                </div>
-            `;
-        }
-
-        renderSettingsPage() {
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Настройки</div>
-                    ${this.renderSettingsSection('appearance')}
-                    <div class="hm-actions hm-actions-left">
-                        <button class="hm-button hm-danger" data-action="reset-settings">Сбросить настройки</button>
-                        <button class="hm-button" data-action="clear-log">Очистить лог</button>
+                <div class="hm-horse-mini">
+                    <div class="hm-horse-title">🐴 Данные лошади</div>
+                    <div class="hm-metric-grid">
+                        ${this.renderMetric('Энергия', horse.energy, '%')}
+                        ${this.renderMetric('Здоровье', horse.health, '%')}
+                        ${this.renderMetric('Мораль', horse.morale, '%')}
+                        ${this.renderMetric('Возраст', horse.age, '')}
+                        ${this.renderMetric('Пол', horse.gender, '')}
+                        ${this.renderMetric('Следующая', horse.nextHorseButton?.found ? 'найдена' : '—', '')}
                     </div>
                 </div>
             `;
         }
 
-        renderSettingsSection(sectionId) {
-            const section = settingsSchema.find((item) => item.id === sectionId);
-            if (!section) return '';
+        renderMetric(label, value, suffix) {
+            const display = value === null || value === undefined || value === '' ? '—' : `${Utils.escapeHtml(value)}${suffix}`;
+            return `<div class="hm-metric"><span>${label}</span><strong>${display}</strong></div>`;
+        }
 
+        renderSettingsPage(schema) {
             return `
-                <div class="hm-settings-section">
-                    <div class="hm-section-title">${section.title}</div>
-                    <p class="hm-muted">${section.description}</p>
-                    ${section.fields.map((field) => this.renderField(section.id, field)).join('')}
+                <div class="hm-card">
+                    <h2>${Utils.escapeHtml(schema.title)}</h2>
+                    <p class="hm-muted">${Utils.escapeHtml(schema.description)}</p>
+                    <div class="hm-form">
+                        ${schema.fields.map((field) => this.renderField(field)).join('')}
+                    </div>
                 </div>
             `;
         }
 
-        renderField(sectionId, field) {
-            const value = this.settingsManager.get(sectionId, field.id);
-            const fieldId = `hm-field-${sectionId}-${field.id}`;
-
+        renderField(field) {
+            const value = this.settings.get(field.path);
             if (field.type === 'checkbox') {
                 return `
-                    <label class="hm-field hm-field-checkbox" for="${fieldId}">
-                        <input id="${fieldId}" type="checkbox" data-setting-section="${sectionId}" data-setting-field="${field.id}" ${value ? 'checked' : ''}>
-                        <span>${field.label}</span>
+                    <label class="hm-field hm-check">
+                        <input type="checkbox" data-setting="${field.path}" ${value ? 'checked' : ''}>
+                        <span>${Utils.escapeHtml(field.label)}</span>
                     </label>
                 `;
             }
-
             if (field.type === 'select') {
                 return `
-                    <label class="hm-field" for="${fieldId}">
-                        <span>${field.label}</span>
-                        <select id="${fieldId}" data-setting-section="${sectionId}" data-setting-field="${field.id}">
-                            ${field.options.map((option) => `<option value="${option.value}" ${option.value === value ? 'selected' : ''}>${option.label}</option>`).join('')}
+                    <label class="hm-field">
+                        <span>${Utils.escapeHtml(field.label)}</span>
+                        <select data-setting="${field.path}">
+                            ${field.options.map((option) => `<option value="${option.value}" ${String(value) === String(option.value) ? 'selected' : ''}>${Utils.escapeHtml(option.label)}</option>`).join('')}
                         </select>
                     </label>
                 `;
             }
-
-            if (field.type === 'number') {
-                return `
-                    <label class="hm-field" for="${fieldId}">
-                        <span>${field.label}</span>
-                        <input id="${fieldId}" type="number" value="${value}" min="${field.min}" max="${field.max}" step="${field.step || 1}" data-setting-section="${sectionId}" data-setting-field="${field.id}">
-                    </label>
-                `;
-            }
-
-            return '';
+            return `
+                <label class="hm-field">
+                    <span>${Utils.escapeHtml(field.label)}</span>
+                    <div class="hm-input-with-suffix">
+                        <input type="number" data-setting="${field.path}" value="${Utils.escapeHtml(value)}" min="${field.min ?? ''}" max="${field.max ?? ''}">
+                        ${field.suffix ? `<em>${Utils.escapeHtml(field.suffix)}</em>` : ''}
+                    </div>
+                </label>
+            `;
         }
 
-        renderLogPanel() {
-            const items = this.logger.all().slice(0, 12);
-
+        renderDeveloper() {
+            const state = this.state.get();
+            const page = state.pageInfo || {};
+            const horse = state.horseInfo || {};
             return `
-                <div class="hm-card hm-log-card">
-                    <div class="hm-card-header">
-                        <div class="hm-card-title">Лог</div>
-                        <button class="hm-small-button" data-action="clear-log">Очистить</button>
+                <div class="hm-grid hm-grid-2">
+                    <div class="hm-card">
+                        <h2>Диагностика страницы</h2>
+                        <div class="hm-facts hm-facts-compact">
+                            <div><span>URL</span><strong title="${Utils.escapeHtml(page.url || location.href)}">${Utils.escapeHtml(page.url || location.href)}</strong></div>
+                            <div><span>Домен</span><strong>${Utils.escapeHtml(page.host || location.hostname)}</strong></div>
+                            <div><span>Тип страницы</span><strong>${Utils.escapeHtml(page.label || '—')}</strong></div>
+                            <div><span>Адаптер</span><strong>${Utils.escapeHtml(this.analysis?.adapter || '—')}</strong></div>
+                            <div><span>Страница лошади</span><strong>${page.isHorsePage ? 'да' : 'нет'}</strong></div>
+                            <div><span>Список лошадей</span><strong>${page.isHorseList ? 'да' : 'нет'}</strong></div>
+                        </div>
+                        <div class="hm-actions-row">
+                            <button class="hm-btn hm-primary" data-action="analyze">Обновить анализ</button>
+                        </div>
                     </div>
-                    <div class="hm-log-list">
-                        ${items.length ? items.map((item) => `
-                            <div class="hm-log-item hm-log-${item.level}">
-                                <span>${item.time}</span>
-                                <strong>${this.escapeHtml(item.message)}</strong>
-                            </div>
-                        `).join('') : '<div class="hm-empty">Лог пока пуст.</div>'}
+                    <div class="hm-card">
+                        <h2>Найденные данные</h2>
+                        <div class="hm-facts hm-facts-compact">
+                            <div><span>Имя</span><strong>${Utils.escapeHtml(horse.name || '—')}</strong></div>
+                            <div><span>Энергия</span><strong>${horse.energy ?? '—'}${horse.energy != null ? '%' : ''}</strong></div>
+                            <div><span>Здоровье</span><strong>${horse.health ?? '—'}${horse.health != null ? '%' : ''}</strong></div>
+                            <div><span>Мораль</span><strong>${horse.morale ?? '—'}${horse.morale != null ? '%' : ''}</strong></div>
+                            <div><span>Возраст</span><strong>${Utils.escapeHtml(horse.age || '—')}</strong></div>
+                            <div><span>Пол</span><strong>${Utils.escapeHtml(horse.gender || '—')}</strong></div>
+                            <div><span>Кнопка следующей лошади</span><strong>${horse.nextHorseButton?.found ? 'найдена' : 'не найдена'}</strong></div>
+                        </div>
+                    </div>
+                </div>
+                ${this.renderSelectorsCard(horse)}
+                ${this.renderSettingsPage(SETTINGS_SCHEMA.developer)}
+            `;
+        }
+
+        renderSelectorsCard(horse) {
+            if (!this.settings.get('developer.showSelectors')) return '';
+            const selectors = horse.selectors || {};
+            const raw = horse.raw || {};
+            return `
+                <div class="hm-card">
+                    <h2>Селекторы и сырой текст</h2>
+                    <div class="hm-debug-table">
+                        ${['name', 'energy', 'health', 'morale', 'age', 'gender', 'nextHorse'].map((key) => `
+                            <div><span>${key}</span><strong>${Utils.escapeHtml(selectors[key] || '—')}</strong><em>${Utils.escapeHtml(raw[key] || '')}</em></div>
+                        `).join('')}
                     </div>
                 </div>
             `;
         }
 
-        bindEvents() {
-            window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-                if (this.settingsManager.get('appearance', 'theme') === 'auto') {
-                    this.render();
-                }
-            });
+        renderStatistics() {
+            return `
+                <div class="hm-card">
+                    <h2>Статистика</h2>
+                    <div class="hm-stats">
+                        <div><strong>0</strong><span>Обработано</span></div>
+                        <div><strong>0</strong><span>Тренировок</span></div>
+                        <div><strong>0</strong><span>Соревнований</span></div>
+                        <div><strong>0</strong><span>КСК</span></div>
+                        <div><strong>0</strong><span>Ошибок</span></div>
+                    </div>
+                    <p class="hm-muted">Статистика начнёт заполняться после добавления игровых действий.</p>
+                </div>
+                ${this.renderLogCard()}
+            `;
         }
 
-        bindDynamicEvents() {
-            this.root.querySelectorAll('[data-page]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    this.activePage = button.dataset.page;
-                    this.render();
-                });
-            });
-
-            this.root.querySelectorAll('[data-action]').forEach((button) => {
-                button.addEventListener('click', () => this.handleAction(button.dataset.action));
-            });
-
-            this.root.querySelectorAll('[data-setting-section]').forEach((input) => {
-                input.addEventListener('change', () => {
-                    const sectionId = input.dataset.settingSection;
-                    const fieldId = input.dataset.settingField;
-                    const value = input.type === 'checkbox'
-                        ? input.checked
-                        : input.type === 'number'
-                            ? Number(input.value)
-                            : input.value;
-
-                    this.settingsManager.set(sectionId, fieldId, value);
-                    this.logger.info(`Настройка сохранена: ${fieldId}`);
-                });
-            });
-
-            this.bindDragEvents();
-        }
-
-        bindDragEvents() {
-            const app = this.root.querySelector('.hm-app');
-            const handles = this.root.querySelectorAll('.hm-drag-handle');
-            if (!app || !handles.length) return;
-
-            handles.forEach((handle) => {
-                handle.addEventListener('mousedown', (event) => {
-                    if (event.target.closest('button')) return;
-                    const rect = app.getBoundingClientRect();
-                    this.drag = {
-                        offsetX: event.clientX - rect.left,
-                        offsetY: event.clientY - rect.top,
-                    };
-                    event.preventDefault();
-                });
-            });
-
-            const onMouseMove = (event) => {
-                if (!this.drag) return;
-                const x = Math.max(12, Math.min(window.innerWidth - 120, event.clientX - this.drag.offsetX));
-                const y = Math.max(12, Math.min(window.innerHeight - 60, event.clientY - this.drag.offsetY));
-                app.style.left = `${x}px`;
-                app.style.top = `${y}px`;
-                app.style.right = 'auto';
-                app.style.bottom = 'auto';
-            };
-
-            const onMouseUp = () => {
-                if (!this.drag) return;
-                const rect = app.getBoundingClientRect();
-                const ui = this.settingsManager.storage.get('ui', {});
-                this.settingsManager.storage.set('ui', { ...ui, x: Math.round(rect.left), y: Math.round(rect.top) });
-                this.drag = null;
-            };
-
-            document.removeEventListener('mousemove', this._onMouseMove);
-            document.removeEventListener('mouseup', this._onMouseUp);
-            this._onMouseMove = onMouseMove;
-            this._onMouseUp = onMouseUp;
-            document.addEventListener('mousemove', this._onMouseMove);
-            document.addEventListener('mouseup', this._onMouseUp);
-        }
-
-        handleAction(action) {
-            const ui = this.settingsManager.storage.get('ui', { minimized: false });
-
-            if (action === 'start') {
-                this.stateManager.start();
-                this.logger.success('Скрипт запущен');
-                return;
-            }
-
-            if (action === 'pause') {
-                this.stateManager.pause();
-                this.logger.warn('Пауза');
-                return;
-            }
-
-            if (action === 'stop') {
-                this.stateManager.stop();
-                this.logger.warn('Скрипт остановлен');
-                return;
-            }
-
-            if (action === 'clear-log') {
-                this.logger.clear();
-                this.logger.info('Лог очищен');
-                return;
-            }
-
-            if (action === 'reset-settings') {
-                this.settingsManager.reset();
-                this.logger.warn('Настройки сброшены');
-                return;
-            }
-
-            if (action === 'toggle-theme') {
-                const current = this.settingsManager.get('appearance', 'theme');
-                const next = current === 'dark' ? 'light' : 'dark';
-                this.settingsManager.set('appearance', 'theme', next);
-                this.logger.info(`Тема изменена: ${next === 'dark' ? 'тёмная' : 'светлая'}`);
-                return;
-            }
-
-            if (action === 'toggle-minimize') {
-                this.settingsManager.storage.set('ui', { ...ui, minimized: !ui.minimized });
-                this.render();
-            }
+        renderLogCard() {
+            const logs = this.logger.items || [];
+            return `
+                <div class="hm-card hm-log-card">
+                    <div class="hm-card-head">
+                        <h2>Лог</h2>
+                        <button class="hm-link-btn" data-action="clear-log">Очистить</button>
+                    </div>
+                    <div class="hm-log-list">
+                        ${logs.length ? logs.slice(0, 30).map((item) => `
+                            <div class="hm-log-item hm-log-${item.level}">
+                                <span>${Utils.escapeHtml(item.time)}</span>
+                                <strong>${Utils.escapeHtml(item.message)}</strong>
+                            </div>
+                        `).join('') : '<div class="hm-empty">Пока записей нет</div>'}
+                    </div>
+                </div>
+            `;
         }
 
         statusLabel(status) {
-            const labels = {
-                [AppStatus.IDLE]: 'Ожидание',
-                [AppStatus.RUNNING]: 'Работает',
-                [AppStatus.PAUSED]: 'Пауза',
-                [AppStatus.STOPPED]: 'Остановлено',
-                [AppStatus.ERROR]: 'Ошибка',
-            };
-
-            return labels[status] || status;
+            return ({ running: 'Работает', paused: 'Пауза', stopped: 'Остановлено', error: 'Ошибка' })[status] || status;
         }
 
-        formatDuration(ms) {
-            const totalSeconds = Math.floor(ms / 1000);
-            const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-            const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-            return `${minutes}:${seconds}`;
+        formatSeconds(seconds) {
+            const min = Math.floor(seconds / 60).toString().padStart(2, '0');
+            const sec = Math.floor(seconds % 60).toString().padStart(2, '0');
+            return `${min}:${sec}`;
         }
 
-        escapeHtml(value) {
-            return String(value)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+        bindDomEvents() {
+            this.shadow.querySelectorAll('[data-page]').forEach((button) => {
+                button.addEventListener('click', () => this.setActivePage(button.dataset.page));
+            });
+
+            this.shadow.querySelectorAll('[data-action]').forEach((element) => {
+                element.addEventListener('click', () => this.handleAction(element.dataset.action));
+            });
+
+            this.shadow.querySelectorAll('[data-setting]').forEach((input) => {
+                input.addEventListener('change', () => {
+                    let value;
+                    if (input.type === 'checkbox') value = input.checked;
+                    else if (input.type === 'number') value = Number(input.value);
+                    else value = input.value;
+                    this.settings.set(input.dataset.setting, value);
+                    if (input.dataset.setting === 'ui.theme') this.logger.info(`Тема изменена: ${this.themeLabel(value)}`);
+                });
+            });
+        }
+
+        handleAction(action) {
+            if (action === 'collapse') {
+                this.settings.set('ui.collapsed', true);
+                return;
+            }
+            if (action === 'expand') {
+                this.settings.set('ui.collapsed', false);
+                return;
+            }
+            if (action === 'toggle-theme') {
+                const current = this.settings.get('ui.theme');
+                const next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
+                this.settings.set('ui.theme', next);
+                this.logger.info(`Тема изменена: ${this.themeLabel(next)}`);
+                return;
+            }
+            if (action === 'start') {
+                this.state.start();
+                this.logger.success('Скрипт запущен в диагностическом режиме');
+                this.runAnalysis('start');
+                return;
+            }
+            if (action === 'pause') {
+                this.state.pause();
+                this.logger.warn('Пауза');
+                return;
+            }
+            if (action === 'stop') {
+                this.state.stop();
+                this.logger.warn('Стоп');
+                return;
+            }
+            if (action === 'clear-log') {
+                this.logger.clear();
+                return;
+            }
+            if (action === 'analyze') {
+                this.runAnalysis('manual');
+            }
+        }
+
+        themeLabel(value) {
+            return ({ dark: 'Тёмная', light: 'Светлая', auto: 'Авто' })[value] || value;
         }
 
         styles() {
             return `
-                :host {
-                    all: initial;
-                    color-scheme: light dark;
-                    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                }
-
-                * {
-                    box-sizing: border-box;
-                }
-
-                .hm-app {
-                    --hm-bg: rgba(248, 250, 252, 0.98);
-                    --hm-panel: #ffffff;
-                    --hm-panel-soft: #f8fafc;
-                    --hm-text: #172033;
-                    --hm-muted: #64748b;
-                    --hm-border: rgba(148, 163, 184, 0.25);
-                    --hm-primary: #7c3aed;
-                    --hm-primary-soft: rgba(124, 58, 237, 0.12);
-                    --hm-danger: #e11d48;
-                    --hm-success: #059669;
-                    --hm-warn: #d97706;
-                    --hm-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
-                    position: fixed;
-                    right: 24px;
-                    bottom: 24px;
-                    width: 880px;
-                    max-width: calc(100vw - 32px);
-                    height: 620px;
-                    max-height: calc(100vh - 32px);
-                    z-index: 2147483647;
-                    color: var(--hm-text);
-                    font-size: 14px;
-                    line-height: 1.45;
-                }
-
+                :host { all: initial; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+                * { box-sizing: border-box; }
+                button, input, select { font: inherit; }
+                .hm-app { position: fixed; z-index: 2147483647; inset: auto 18px 18px auto; color: var(--hm-text); }
                 .hm-theme-dark {
-                    --hm-bg: rgba(15, 23, 42, 0.98);
-                    --hm-panel: #111827;
-                    --hm-panel-soft: #0f172a;
-                    --hm-text: #e5e7eb;
-                    --hm-muted: #94a3b8;
-                    --hm-border: rgba(148, 163, 184, 0.22);
-                    --hm-primary: #a78bfa;
-                    --hm-primary-soft: rgba(167, 139, 250, 0.16);
-                    --hm-danger: #fb7185;
-                    --hm-success: #34d399;
-                    --hm-warn: #fbbf24;
-                    --hm-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+                    --hm-bg: #0f172a; --hm-panel: rgba(15, 23, 42, .96); --hm-sidebar: rgba(30, 31, 68, .94);
+                    --hm-card: rgba(15, 23, 42, .78); --hm-soft: rgba(124, 92, 255, .16); --hm-border: rgba(148, 163, 184, .22);
+                    --hm-text: #f8fafc; --hm-muted: #aeb8cc; --hm-primary: #a78bfa; --hm-primary-2: #7c3aed; --hm-danger: #fb7185;
+                    --hm-shadow: 0 24px 80px rgba(0, 0, 0, .45);
                 }
-
-                .hm-shell {
-                    display: grid;
-                    grid-template-columns: 220px 1fr;
-                    width: 100%;
-                    height: 100%;
-                    overflow: hidden;
-                    background: var(--hm-bg);
-                    border: 1px solid var(--hm-border);
-                    border-radius: 24px;
-                    box-shadow: var(--hm-shadow);
-                    backdrop-filter: blur(18px);
+                .hm-theme-light {
+                    --hm-bg: #f8fafc; --hm-panel: rgba(255, 255, 255, .96); --hm-sidebar: rgba(245, 243, 255, .96);
+                    --hm-card: rgba(255, 255, 255, .86); --hm-soft: rgba(124, 92, 255, .12); --hm-border: rgba(51, 65, 85, .16);
+                    --hm-text: #172033; --hm-muted: #64748b; --hm-primary: #8b5cf6; --hm-primary-2: #6d28d9; --hm-danger: #e11d48;
+                    --hm-shadow: 0 24px 80px rgba(15, 23, 42, .20);
                 }
-
-                .hm-minimized {
-                    width: 310px;
-                    height: 76px;
-                }
-
-                .hm-minimized .hm-sidebar,
-                .hm-minimized .hm-page,
-                .hm-minimized .hm-kicker {
-                    display: none;
-                }
-
-                .hm-minimized .hm-shell {
-                    display: block;
-                    border-radius: 20px;
-                }
-
-                .hm-minimized .hm-content,
-                .hm-minimized .hm-header {
-                    height: 100%;
-                }
-
-                .hm-sidebar {
-                    padding: 18px;
-                    border-right: 1px solid var(--hm-border);
-                    background: linear-gradient(180deg, var(--hm-primary-soft), transparent 55%);
-                }
-
-                .hm-brand {
-                    display: flex;
-                    gap: 12px;
-                    align-items: center;
-                    margin-bottom: 20px;
-                    cursor: move;
-                    user-select: none;
-                }
-
-                .hm-brand-icon {
-                    display: grid;
-                    place-items: center;
-                    width: 42px;
-                    height: 42px;
-                    border-radius: 14px;
-                    background: var(--hm-primary-soft);
-                    font-size: 22px;
-                }
-
-                .hm-brand-title {
-                    font-weight: 800;
-                    letter-spacing: -0.03em;
-                }
-
-                .hm-brand-subtitle,
-                .hm-kicker,
-                .hm-muted {
-                    color: var(--hm-muted);
-                    font-size: 12px;
-                }
-
-                .hm-nav {
-                    display: grid;
-                    gap: 6px;
-                }
-
-                .hm-nav-item,
-                .hm-button,
-                .hm-icon-button,
-                .hm-small-button {
-                    border: 0;
-                    font: inherit;
-                    color: inherit;
-                    cursor: pointer;
-                }
-
-                .hm-nav-item {
-                    display: flex;
-                    gap: 10px;
-                    align-items: center;
-                    width: 100%;
-                    padding: 10px 12px;
-                    border-radius: 14px;
-                    background: transparent;
-                    color: var(--hm-muted);
-                    text-align: left;
-                    transition: 0.18s ease;
-                }
-
-                .hm-nav-item:hover,
-                .hm-nav-item.hm-active {
-                    color: var(--hm-text);
-                    background: var(--hm-primary-soft);
-                }
-
-                .hm-content {
-                    display: flex;
-                    flex-direction: column;
-                    min-width: 0;
-                }
-
-                .hm-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    gap: 16px;
-                    padding: 18px 22px;
-                    border-bottom: 1px solid var(--hm-border);
-                    cursor: move;
-                    user-select: none;
-                }
-
-                .hm-header h1 {
-                    margin: 2px 0 0;
-                    font-size: 22px;
-                    line-height: 1.1;
-                    letter-spacing: -0.04em;
-                }
-
-                .hm-window-actions,
-                .hm-actions {
-                    display: flex;
-                    gap: 8px;
-                    align-items: center;
-                }
-
-                .hm-page {
-                    flex: 1;
-                    overflow: auto;
-                    padding: 20px 22px;
-                }
-
-                .hm-grid {
-                    display: grid;
-                    gap: 14px;
-                    margin-bottom: 14px;
-                }
-
-                .hm-grid-2 {
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                }
-
-                .hm-grid-3 {
-                    grid-template-columns: repeat(3, minmax(0, 1fr));
-                }
-
-                .hm-card,
-                .hm-stat {
-                    padding: 16px;
-                    border: 1px solid var(--hm-border);
-                    border-radius: 20px;
-                    background: var(--hm-panel);
-                }
-
-                .hm-card-accent {
-                    background: linear-gradient(135deg, var(--hm-primary-soft), var(--hm-panel));
-                }
-
-                .hm-card-title,
-                .hm-section-title {
-                    margin-bottom: 10px;
-                    font-weight: 800;
-                    letter-spacing: -0.02em;
-                }
-
-                .hm-card-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    margin-bottom: 8px;
-                }
-
-                .hm-status-row {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    gap: 12px;
-                    margin-bottom: 14px;
-                }
-
-                .hm-status {
-                    display: inline-flex;
-                    align-items: center;
-                    padding: 6px 10px;
-                    border-radius: 999px;
-                    background: var(--hm-primary-soft);
-                    font-weight: 700;
-                }
-
-                .hm-status-running,
-                .hm-log-success {
-                    color: var(--hm-success);
-                }
-
-                .hm-status-paused,
-                .hm-log-warn {
-                    color: var(--hm-warn);
-                }
-
-                .hm-status-error,
-                .hm-log-error {
-                    color: var(--hm-danger);
-                }
-
-                .hm-info-list,
-                .hm-dev-grid {
-                    display: grid;
-                    gap: 8px;
-                    margin: 12px 0 16px;
-                }
-
-                .hm-info-list div,
-                .hm-dev-grid div {
-                    display: flex;
-                    justify-content: space-between;
-                    gap: 12px;
-                    padding: 9px 0;
-                    border-bottom: 1px solid var(--hm-border);
-                }
-
-                .hm-dev-grid div {
-                    display: grid;
-                    grid-template-columns: 150px 1fr;
-                }
-
-                .hm-dev-grid strong {
-                    overflow-wrap: anywhere;
-                }
-
-                .hm-info-list span,
-                .hm-dev-grid span,
-                .hm-stat span {
-                    color: var(--hm-muted);
-                }
-
-                .hm-actions {
-                    justify-content: flex-end;
-                    margin-top: 12px;
-                }
-
-                .hm-actions-left {
-                    justify-content: flex-start;
-                }
-
-                .hm-button,
-                .hm-icon-button,
-                .hm-small-button {
-                    border-radius: 12px;
-                    background: var(--hm-panel-soft);
-                    transition: 0.18s ease;
-                }
-
-                .hm-button {
-                    padding: 9px 13px;
-                    font-weight: 700;
-                }
-
-                .hm-small-button {
-                    padding: 6px 10px;
-                    color: var(--hm-muted);
-                    font-size: 12px;
-                }
-
-                .hm-icon-button {
-                    display: grid;
-                    place-items: center;
-                    width: 36px;
-                    height: 36px;
-                }
-
-                .hm-button:hover,
-                .hm-icon-button:hover,
-                .hm-small-button:hover {
-                    transform: translateY(-1px);
-                    filter: brightness(1.04);
-                }
-
-                .hm-primary {
-                    background: var(--hm-primary);
-                    color: white;
-                }
-
-                .hm-danger {
-                    background: rgba(225, 29, 72, 0.12);
-                    color: var(--hm-danger);
-                }
-
-                .hm-note,
-                .hm-empty {
-                    margin-top: 12px;
-                    padding: 12px;
-                    border-radius: 14px;
-                    background: var(--hm-panel-soft);
-                    color: var(--hm-muted);
-                }
-
-                .hm-settings-section {
-                    margin-top: 14px;
-                    padding-top: 14px;
-                    border-top: 1px solid var(--hm-border);
-                }
-
-                .hm-field {
-                    display: grid;
-                    grid-template-columns: 1fr minmax(150px, 210px);
-                    align-items: center;
-                    gap: 12px;
-                    margin: 10px 0;
-                }
-
-                .hm-field-checkbox {
-                    display: flex;
-                    justify-content: flex-start;
-                }
-
-                .hm-field input,
-                .hm-field select {
-                    width: 100%;
-                    padding: 8px 10px;
-                    border: 1px solid var(--hm-border);
-                    border-radius: 12px;
-                    background: var(--hm-panel-soft);
-                    color: var(--hm-text);
-                    font: inherit;
-                }
-
-                .hm-field-checkbox input {
-                    width: auto;
-                    accent-color: var(--hm-primary);
-                }
-
-                .hm-log-list {
-                    display: grid;
-                    gap: 7px;
-                    max-height: 190px;
-                    overflow: auto;
-                }
-
-                .hm-log-item {
-                    display: grid;
-                    grid-template-columns: 72px 1fr;
-                    gap: 10px;
-                    padding: 8px 10px;
-                    border-radius: 12px;
-                    background: var(--hm-panel-soft);
-                }
-
-                .hm-log-item span {
-                    color: var(--hm-muted);
-                    font-size: 12px;
-                }
-
-                .hm-stat {
-                    display: grid;
-                    gap: 4px;
-                }
-
-                .hm-stat strong {
-                    font-size: 28px;
-                    letter-spacing: -0.05em;
-                }
-
-                .hm-compact .hm-sidebar {
-                    padding: 14px;
-                }
-
-                .hm-compact .hm-page {
-                    padding: 14px;
-                }
-
-                @media (max-width: 760px) {
-                    .hm-app {
-                        left: 12px !important;
-                        right: 12px !important;
-                        bottom: 12px;
-                        width: auto;
-                        height: min(680px, calc(100vh - 24px));
-                    }
-
-                    .hm-shell {
-                        grid-template-columns: 1fr;
-                    }
-
-                    .hm-sidebar {
-                        border-right: 0;
-                        border-bottom: 1px solid var(--hm-border);
-                    }
-
-                    .hm-nav {
-                        grid-template-columns: repeat(2, minmax(0, 1fr));
-                    }
-
-                    .hm-grid-2,
-                    .hm-grid-3 {
-                        grid-template-columns: 1fr;
-                    }
+                .hm-bubble { width: 66px; height: 66px; border: 0; border-radius: 24px; cursor: pointer; background: linear-gradient(135deg, var(--hm-primary), var(--hm-primary-2)); color: white; font-size: 32px; box-shadow: var(--hm-shadow); }
+                .hm-panel { width: min(1380px, calc(100vw - 36px)); height: min(760px, calc(100vh - 36px)); display: grid; grid-template-columns: 270px 1fr; overflow: hidden; border: 1px solid var(--hm-border); border-radius: 34px; background: var(--hm-panel); box-shadow: var(--hm-shadow); backdrop-filter: blur(18px); }
+                .hm-sidebar { padding: 24px 18px; background: var(--hm-sidebar); border-right: 1px solid var(--hm-border); display: flex; flex-direction: column; gap: 24px; }
+                .hm-brand { display: flex; align-items: center; gap: 14px; padding: 0 6px; }
+                .hm-logo { width: 54px; height: 54px; border-radius: 20px; display: grid; place-items: center; background: var(--hm-soft); font-size: 28px; }
+                .hm-title { font-size: 19px; font-weight: 850; letter-spacing: -.03em; }
+                .hm-version, .hm-kicker, .hm-muted, .hm-log-item span, .hm-field > span, .hm-facts span, .hm-metric span { color: var(--hm-muted); }
+                .hm-menu { display: flex; flex-direction: column; gap: 8px; }
+                .hm-menu-item { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 18px; padding: 14px 16px; background: transparent; color: var(--hm-muted); cursor: pointer; text-align: left; font-weight: 750; font-size: 16px; }
+                .hm-menu-item:hover, .hm-menu-item.is-active { color: var(--hm-text); background: var(--hm-soft); }
+                .hm-main { min-width: 0; overflow: auto; background: linear-gradient(145deg, rgba(124,92,255,.08), transparent 35%); }
+                .hm-header { min-height: 112px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 26px 34px; border-bottom: 1px solid var(--hm-border); }
+                .hm-header h1 { margin: 4px 0 0; font-size: 32px; line-height: 1.1; letter-spacing: -.04em; color: var(--hm-text); }
+                .hm-header-actions { display: flex; gap: 10px; }
+                .hm-icon-btn { width: 46px; height: 46px; border: 0; border-radius: 16px; cursor: pointer; color: var(--hm-text); background: rgba(15, 23, 42, .06); }
+                .hm-content { padding: 26px 34px 34px; display: flex; flex-direction: column; gap: 22px; }
+                .hm-grid { display: grid; gap: 22px; }
+                .hm-grid-2 { grid-template-columns: 1fr 1fr; }
+                .hm-card { border: 1px solid var(--hm-border); border-radius: 28px; padding: 24px; background: var(--hm-card); }
+                .hm-card h2 { margin: 0 0 14px; color: var(--hm-text); font-size: 21px; letter-spacing: -.03em; }
+                .hm-card p { font-size: 17px; line-height: 1.45; }
+                .hm-hero-card { background: linear-gradient(135deg, var(--hm-soft), var(--hm-card)); }
+                .hm-status-line, .hm-card-head, .hm-actions-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+                .hm-status-line { justify-content: space-between; margin-bottom: 20px; color: var(--hm-muted); }
+                .hm-pill { display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 999px; background: var(--hm-soft); color: var(--hm-text); font-weight: 850; }
+                .hm-pill-running { background: rgba(34, 197, 94, .18); }
+                .hm-pill-paused { background: rgba(251, 191, 36, .20); }
+                .hm-pill-error { background: rgba(251, 113, 133, .18); }
+                .hm-facts { display: grid; gap: 12px; margin: 14px 0 20px; }
+                .hm-facts div, .hm-metric, .hm-debug-table div { display: grid; grid-template-columns: 170px 1fr; gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--hm-border); }
+                .hm-facts-compact div { grid-template-columns: 160px minmax(0, 1fr); }
+                .hm-facts strong, .hm-metric strong { color: var(--hm-text); overflow: hidden; text-overflow: ellipsis; }
+                .hm-horse-mini { margin: 18px 0; padding: 16px; border-radius: 22px; background: rgba(127, 127, 127, .08); border: 1px solid var(--hm-border); }
+                .hm-horse-title { font-weight: 850; margin-bottom: 12px; }
+                .hm-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+                .hm-metric { grid-template-columns: 1fr auto; padding: 8px 0; }
+                .hm-btn { border: 0; border-radius: 16px; padding: 12px 18px; cursor: pointer; font-weight: 850; color: var(--hm-text); background: var(--hm-soft); }
+                .hm-btn:hover { transform: translateY(-1px); }
+                .hm-primary { background: linear-gradient(135deg, var(--hm-primary), var(--hm-primary-2)); color: white; }
+                .hm-danger { background: rgba(251, 113, 133, .16); color: var(--hm-danger); }
+                .hm-ghost { background: transparent; border: 1px solid var(--hm-border); }
+                .hm-link-btn { margin-left: auto; border: 0; background: transparent; color: var(--hm-muted); cursor: pointer; font-weight: 750; }
+                .hm-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+                .hm-field { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--hm-border); border-radius: 18px; background: rgba(127, 127, 127, .05); }
+                .hm-check { display: flex; align-items: center; flex-direction: row; color: var(--hm-text); font-weight: 750; }
+                .hm-check input { width: 18px; height: 18px; accent-color: var(--hm-primary); }
+                .hm-field input:not([type='checkbox']), .hm-field select { width: 100%; border: 1px solid var(--hm-border); border-radius: 14px; padding: 10px 12px; color: var(--hm-text); background: rgba(127, 127, 127, .08); outline: none; }
+                .hm-input-with-suffix { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+                .hm-input-with-suffix em { color: var(--hm-muted); font-style: normal; }
+                .hm-log-list { display: grid; gap: 8px; max-height: 260px; overflow: auto; }
+                .hm-log-item { display: grid; grid-template-columns: 90px 1fr; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 14px; background: rgba(127, 127, 127, .06); }
+                .hm-log-item strong { color: var(--hm-text); }
+                .hm-log-success strong { color: #34d399; }
+                .hm-log-warn strong { color: #fbbf24; }
+                .hm-log-error strong { color: #fb7185; }
+                .hm-empty { color: var(--hm-muted); padding: 18px 0; }
+                .hm-debug-table { display: grid; gap: 4px; }
+                .hm-debug-table div { grid-template-columns: 110px minmax(120px, 1fr) minmax(120px, 1fr); }
+                .hm-debug-table span { color: var(--hm-muted); }
+                .hm-debug-table strong { color: var(--hm-text); }
+                .hm-debug-table em { color: var(--hm-muted); font-style: normal; overflow: hidden; text-overflow: ellipsis; }
+                .hm-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+                .hm-stats div { padding: 18px; border: 1px solid var(--hm-border); border-radius: 18px; background: rgba(127, 127, 127, .06); }
+                .hm-stats strong { display: block; font-size: 30px; color: var(--hm-text); }
+                .hm-stats span { color: var(--hm-muted); }
+                @media (max-width: 980px) {
+                    .hm-panel { grid-template-columns: 1fr; height: calc(100vh - 24px); width: calc(100vw - 24px); }
+                    .hm-sidebar { border-right: 0; border-bottom: 1px solid var(--hm-border); }
+                    .hm-menu { display: grid; grid-template-columns: repeat(2, 1fr); }
+                    .hm-grid-2, .hm-form { grid-template-columns: 1fr; }
                 }
             `;
         }
@@ -1362,41 +1327,36 @@
 
     class Application {
         constructor() {
-            this.eventBus = new EventBus();
+            this.bus = new EventBus();
             this.storage = new Storage(APP.storagePrefix);
-            this.settingsManager = new SettingsManager(this.eventBus, this.storage, settingsSchema);
-            this.logger = new Logger(this.eventBus, this.storage);
-            this.stateManager = new StateManager(this.eventBus, this.storage);
-            this.delayManager = new DelayManager(this.settingsManager);
-            this.routeManager = new RouteManager();
-            this.adapter = AdapterFactory.create(this.routeManager);
+            this.settings = new SettingsManager(this.storage, this.bus);
+            this.logger = new Logger(this.storage, this.bus);
+            this.state = new StateManager(this.bus);
+            this.delay = new DelayManager(this.settings);
+            this.adapter = AdapterFactory.create();
             this.ui = new UIManager({
-                eventBus: this.eventBus,
+                bus: this.bus,
+                settings: this.settings,
+                state: this.state,
                 logger: this.logger,
-                settingsManager: this.settingsManager,
-                stateManager: this.stateManager,
-                adapter: this.adapter,
+                adapter: this.adapter
             });
         }
 
-        start() {
-            const pageInfo = this.adapter.getPageInfo();
-            this.stateManager.patch({ pageType: pageInfo.pageType });
-            this.ui.mount();
-            this.logger.info('Howrse Manager загружен');
-            this.logger.info(`Адаптер: ${pageInfo.adapter}`);
+        init() {
+            const mount = () => {
+                this.ui.mount();
+                this.logger.info(`Howrse Manager v${APP.version} загружен`);
+                if (!this.adapter) this.logger.warn('Для текущего домена пока нет адаптера');
+            };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', mount, { once: true });
+            } else {
+                mount();
+            }
         }
     }
 
-    function bootstrap() {
-        const app = new Application();
-        app.start();
-        window.HowrseManager = app;
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
-    } else {
-        bootstrap();
-    }
-}());
+    new Application().init();
+})();
