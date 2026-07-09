@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.3.0
-// @description  Умный менеджер табуна для Ловади / Howrse. v0.3: анализ лошади и гибридный переход к следующей.
+// @version      0.3.1
+// @description  Умный менеджер табуна для Ловади / Howrse. v0.3.1: улучшения табунного режима и интерфейса.
 // @author       less-exe
 // @match        https://www.lowadi.com/*
 // @match        http://www.lowadi.com/*
@@ -15,7 +15,7 @@
     const APP = {
         id: 'howrse-manager',
         name: 'Howrse Manager',
-        version: '0.3.0',
+        version: '0.3.1',
         storagePrefix: 'hm:v0.1',
     };
 
@@ -74,9 +74,19 @@
             description: 'Гибридный режим: текущая лошадь → анализ → следующая лошадь.',
             fields: [
                 {
+                    id: 'limitMode',
+                    type: 'select',
+                    label: 'Максимум лошадей за запуск',
+                    default: 'manual',
+                    options: [
+                        { value: 'manual', label: 'Ручной лимит' },
+                        { value: 'auto', label: 'Авто — до конца завода' },
+                    ],
+                },
+                {
                     id: 'maxHorsesPerRun',
                     type: 'number',
-                    label: 'Максимум лошадей за запуск',
+                    label: 'Лимит при ручном режиме',
                     default: 25,
                     min: 1,
                     max: 5000,
@@ -144,14 +154,12 @@
         }
 
         off(eventName, callback) {
-            const callbacks = this.listeners.get(eventName);
-            if (callbacks) callbacks.delete(callback);
+            this.listeners.get(eventName)?.delete(callback);
         }
 
         emit(eventName, payload) {
             const callbacks = this.listeners.get(eventName);
             if (!callbacks) return;
-
             callbacks.forEach((callback) => {
                 try {
                     callback(payload);
@@ -188,10 +196,6 @@
                 console.warn(`[${APP.name}] Failed to write storage key: ${name}`, error);
             }
         }
-
-        remove(name) {
-            window.localStorage.removeItem(this.key(name));
-        }
     }
 
     class Logger {
@@ -210,7 +214,6 @@
                 message,
                 details,
             };
-
             this.items.unshift(item);
             this.items = this.items.slice(0, this.maxItems);
             this.storage.set('log', this.items);
@@ -243,7 +246,7 @@
         }
 
         createDefaults(schema) {
-            const defaults = { version: 3 };
+            const defaults = { version: 4 };
             schema.forEach((section) => {
                 defaults[section.id] = {};
                 section.fields.forEach((field) => {
@@ -254,8 +257,7 @@
         }
 
         load() {
-            const saved = this.storage.get('settings', {});
-            return this.mergeDeep(this.defaults, saved);
+            return this.mergeDeep(this.defaults, this.storage.get('settings', {}));
         }
 
         mergeDeep(base, override) {
@@ -309,6 +311,7 @@
                 currentOperation: 'Ожидание',
                 progress: { current: 0, total: 0 },
                 startedAt: null,
+                finishedAt: null,
                 lastActionAt: null,
                 pageType: PageType.UNKNOWN,
                 currentHorse: null,
@@ -316,6 +319,7 @@
                     processedIds: [],
                     softStopRequested: false,
                     lastError: null,
+                    limitMode: 'manual',
                 },
             };
         }
@@ -339,18 +343,20 @@
             this.eventBus.emit('state:changed', this.get());
         }
 
-        start(total = 0) {
+        start(total = 0, limitMode = 'manual') {
             this.patch({
                 status: AppStatus.RUNNING,
                 mode: 'hybrid-herd',
                 currentOperation: 'Запуск табунного режима',
                 progress: { current: 0, total },
                 startedAt: Date.now(),
+                finishedAt: null,
                 lastActionAt: Date.now(),
                 run: {
                     processedIds: [],
                     softStopRequested: false,
                     lastError: null,
+                    limitMode,
                 },
             });
         }
@@ -360,17 +366,18 @@
         }
 
         resume() {
-            this.patch({ status: AppStatus.RUNNING, currentOperation: 'Продолжение работы', lastActionAt: Date.now() });
+            this.patch({ status: AppStatus.RUNNING, currentOperation: 'Продолжение работы', lastActionAt: Date.now(), finishedAt: null });
         }
 
-        stop() {
-            this.patch({ status: AppStatus.STOPPED, mode: null, currentOperation: 'Остановлено', lastActionAt: Date.now() });
+        stop(operation = 'Остановлено') {
+            this.patch({ status: AppStatus.STOPPED, mode: null, currentOperation: operation, finishedAt: Date.now(), lastActionAt: Date.now() });
         }
 
         error(message) {
             this.patch({
                 status: AppStatus.ERROR,
                 currentOperation: 'Ошибка',
+                finishedAt: Date.now(),
                 lastActionAt: Date.now(),
                 run: { ...this.state.run, lastError: message },
             });
@@ -429,12 +436,10 @@
         getCurrentPageType() {
             const path = window.location.pathname;
             const href = window.location.href;
-
             if (/\/elevage\/chevaux\/cheval/i.test(path) || /[?&]id=\d+/i.test(href)) return PageType.HORSE;
             if (/centre|centre-equestre|centreEquestre|ecuri/i.test(path)) return PageType.EC;
             if (/competition|competitions|course/i.test(path)) return PageType.COMPETITIONS;
             if (/\/elevage\/chevaux\/?$/i.test(path) || /\/elevage\/chevaux/i.test(path)) return PageType.HORSE_LIST;
-
             return PageType.UNKNOWN;
         }
     }
@@ -456,19 +461,6 @@
             }
             this.lastMatches[key] = null;
             return null;
-        }
-
-        findAll(key, root = document) {
-            const variants = this.selectors[key] || [];
-            for (const selector of variants) {
-                const elements = [...root.querySelectorAll(selector)];
-                if (elements.length) {
-                    this.lastMatches[key] = selector;
-                    return elements;
-                }
-            }
-            this.lastMatches[key] = null;
-            return [];
         }
 
         getLastMatches() {
@@ -521,17 +513,9 @@
                 .replace(/\s*-\s*Ловади\s*$/i, '')
                 .replace(/\s*-\s*Howrse\s*$/i, '')
                 .trim();
-
             if (title && !/^(lowadi|howrse|ловади)$/i.test(title)) return title;
 
-            const nameSelectors = [
-                '#characteristics-body-content h1',
-                '.horse-name',
-                '[class*="horse"] h1',
-                'h1',
-                'h2',
-            ];
-
+            const nameSelectors = ['#characteristics-body-content h1', '.horse-name', '[class*="horse"] h1', 'h1', 'h2'];
             for (const selector of nameSelectors) {
                 const element = document.querySelector(selector);
                 const candidate = this.normalize(element?.textContent || '');
@@ -540,20 +524,15 @@
 
             const byTabun = text.match(/(?:Табун\s+[^\s]+\s+)?((?:жен|муж)\s+[0-9.,]+)/i);
             if (byTabun) return byTabun[1];
-
             return '—';
         }
 
         getPercentNearLabel(text, label) {
             const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const pattern = new RegExp(`${escaped}\\s*(\\d{1,3})\\s*%`, 'i');
-            const direct = text.match(pattern);
+            const direct = text.match(new RegExp(`${escaped}\\s*(\\d{1,3})\\s*%`, 'i'));
             if (direct) return Math.min(100, Number(direct[1]));
-
-            const reverse = new RegExp(`(\\d{1,3})\\s*%\\s*${escaped}`, 'i');
-            const reversed = text.match(reverse);
+            const reversed = text.match(new RegExp(`(\\d{1,3})\\s*%\\s*${escaped}`, 'i'));
             if (reversed) return Math.min(100, Number(reversed[1]));
-
             return null;
         }
 
@@ -563,12 +542,10 @@
                 text.match(/(\d+\s*(?:год|года|лет)\s*(?:и\s*)?\d*\s*(?:месяц|месяца|месяцев)?)/i),
                 text.match(/(\d+\s*(?:месяц|месяца|месяцев))/i),
             ];
-
             for (const match of candidates) {
                 const value = this.normalize(match?.[1] || '');
                 if (value && !/смотреть страницу профиля|обучив/i.test(value)) return value;
             }
-
             return null;
         }
 
@@ -585,10 +562,8 @@
                 ...document.querySelectorAll('a[href*="sens=suivant"], a[href*="next"], button[title*="след" i], a[title*="след" i]'),
                 ...document.querySelectorAll('button, a'),
             ];
-
             const byHref = candidates.find((element) => /go=next|sens=suivant/i.test(element.getAttribute('href') || element.getAttribute('onclick') || ''));
             if (byHref) return byHref;
-
             const byText = candidates.find((element) => /следующ|suivant|next/i.test(this.normalize(element.textContent || element.title || element.getAttribute('aria-label') || '')));
             if (byText) return byText;
 
@@ -599,7 +574,6 @@
                 const looksLikeArrow = text === '›' || text === '>' || text === '→' || /arrow|next|suivant/i.test(element.className || '');
                 return looksLikeArrow || /go=next/i.test(href) || (rect.width >= 20 && rect.height >= 20 && rect.left > window.innerWidth * 0.45 && rect.top > window.innerHeight * 0.45);
             });
-
             return rightArrowLinks[rightArrowLinks.length - 1] || null;
         }
 
@@ -625,23 +599,19 @@
         isSupported() { return false; }
 
         getPageInfo() {
+            const pageType = this.routeManager.getCurrentPageType();
             return {
                 hostname: window.location.hostname,
                 url: window.location.href,
-                pageType: this.routeManager.getCurrentPageType(),
-                pageTypeLabel: PageLabels[this.routeManager.getCurrentPageType()] || PageLabels.unknown,
+                pageType,
+                pageTypeLabel: PageLabels[pageType] || PageLabels[PageType.UNKNOWN],
                 adapter: this.getName(),
                 supported: this.isSupported(),
             };
         }
 
-        analyzeHorse() {
-            return this.horseParser.parse();
-        }
-
-        findNextHorseButton() {
-            return this.horseParser.findNextHorseButton();
-        }
+        analyzeHorse() { return this.horseParser.parse(); }
+        findNextHorseButton() { return this.horseParser.findNextHorseButton(); }
     }
 
     class LowadiAdapter extends GameAdapter {
@@ -667,9 +637,14 @@
             this.isExecuting = false;
         }
 
+        isAutoLimit() {
+            return this.settingsManager.get('run', 'limitMode') === 'auto';
+        }
+
         async start() {
             const pageInfo = this.adapter.getPageInfo();
-            const max = this.settingsManager.get('run', 'maxHorsesPerRun') || 25;
+            const autoLimit = this.isAutoLimit();
+            const max = Number(this.settingsManager.get('run', 'maxHorsesPerRun') || 25);
 
             if (pageInfo.pageType !== PageType.HORSE) {
                 this.logger.warn('Откройте страницу лошади для запуска табунного режима');
@@ -677,8 +652,8 @@
                 return;
             }
 
-            this.stateManager.start(max);
-            this.logger.success('Табунный режим запущен');
+            this.stateManager.start(autoLimit ? 0 : max, autoLimit ? 'auto' : 'manual');
+            this.logger.success(autoLimit ? 'Табунный режим запущен: Авто до конца завода' : `Табунный режим запущен: лимит ${max}`);
             await this.processCurrentHorseAndGoNext();
         }
 
@@ -698,7 +673,7 @@
 
         stop() {
             this.clearTimer();
-            this.stateManager.stop();
+            this.stateManager.stop('Остановлено');
             this.logger.warn('Табунный режим остановлен');
         }
 
@@ -710,11 +685,8 @@
         scheduleAutoResume() {
             const state = this.stateManager.get();
             if (state.status !== AppStatus.RUNNING || state.mode !== 'hybrid-herd') return;
-
             this.clearTimer();
-            this.timer = window.setTimeout(() => {
-                this.processCurrentHorseAndGoNext();
-            }, 1200);
+            this.timer = window.setTimeout(() => this.processCurrentHorseAndGoNext(), 1200);
         }
 
         clearTimer() {
@@ -731,7 +703,6 @@
             try {
                 const state = this.stateManager.get();
                 const pageInfo = this.adapter.getPageInfo();
-
                 if (state.status !== AppStatus.RUNNING) return;
 
                 if (pageInfo.pageType !== PageType.HORSE) {
@@ -745,8 +716,13 @@
                 const processedIds = state.run.processedIds || [];
 
                 if (processedIds.includes(id)) {
-                    this.logger.warn('Похоже, табун пошёл по кругу. Работа остановлена.');
-                    this.stateManager.stop();
+                    if (state.run.limitMode === 'auto') {
+                        this.logger.success('Авто-режим завершён: похоже, все лошади в заводе пройдены');
+                        this.stateManager.stop('Завод пройден');
+                    } else {
+                        this.logger.warn('Похоже, табун пошёл по кругу. Работа остановлена.');
+                        this.stateManager.stop('Остановлено: круг табуна');
+                    }
                     return;
                 }
 
@@ -755,18 +731,19 @@
                 this.logger.success(`Лошадь отмечена: ${horse.name || id}`);
 
                 const freshState = this.stateManager.get();
-                const max = freshState.progress.total || this.settingsManager.get('run', 'maxHorsesPerRun') || 25;
+                const manualLimit = freshState.run.limitMode !== 'auto';
+                const max = freshState.progress.total || Number(this.settingsManager.get('run', 'maxHorsesPerRun') || 25);
                 const stopAfterCurrent = this.settingsManager.get('run', 'stopAfterCurrentHorse') || freshState.run.softStopRequested;
 
-                if (freshState.progress.current >= max) {
+                if (manualLimit && freshState.progress.current >= max) {
                     this.logger.success(`Достигнут лимит запуска: ${max}`);
-                    this.stateManager.stop();
+                    this.stateManager.stop('Достигнут лимит');
                     return;
                 }
 
                 if (stopAfterCurrent) {
                     this.logger.success('Мягкая остановка выполнена после текущей лошади');
-                    this.stateManager.stop();
+                    this.stateManager.stop('Мягкая остановка');
                     return;
                 }
 
@@ -806,11 +783,12 @@
             this.stateManager = stateManager;
             this.adapter = adapter;
             this.runner = runner;
-            this.activePage = 'home';
             this.host = null;
             this.root = null;
             this.drag = null;
+            this.runtimeTimer = null;
             this.latestAnalysis = this.storageGetAnalysis();
+            this.activePage = this.settingsManager.storage.get('ui', {})?.activePage || 'home';
             this.pages = [
                 { id: 'home', icon: '🏠', label: 'Главная' },
                 { id: 'run', icon: '🐴', label: 'Прогон' },
@@ -831,6 +809,7 @@
             this.root = this.host.attachShadow({ mode: 'open' });
             this.render();
             this.bindEvents();
+            this.startRuntimeTimer();
             this.eventBus.on('state:changed', () => this.render());
             this.eventBus.on('settings:changed', () => this.render());
             this.eventBus.on('log:changed', () => this.render());
@@ -851,11 +830,41 @@
             return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
 
+        getRuntimeText() {
+            const state = this.stateManager.get();
+            if (!state.startedAt) return '00:00';
+            const end = state.status === AppStatus.RUNNING || state.status === AppStatus.PAUSED
+                ? Date.now()
+                : state.finishedAt || state.lastActionAt || Date.now();
+            return this.formatDuration(Math.max(0, end - state.startedAt));
+        }
+
+        startRuntimeTimer() {
+            if (this.runtimeTimer) window.clearInterval(this.runtimeTimer);
+            this.runtimeTimer = window.setInterval(() => this.updateRuntimeNodes(), 1000);
+            this.updateRuntimeNodes();
+        }
+
+        updateRuntimeNodes() {
+            if (!this.root) return;
+            const text = this.getRuntimeText();
+            this.root.querySelectorAll('[data-runtime]').forEach((node) => {
+                node.textContent = text;
+            });
+        }
+
+        getPositionStyle(savedUi) {
+            if (savedUi.x === null || savedUi.x === undefined || savedUi.y === null || savedUi.y === undefined) return '';
+            const x = Math.max(12, Math.min(window.innerWidth - 180, Number(savedUi.x)));
+            const y = Math.max(12, Math.min(window.innerHeight - 120, Number(savedUi.y)));
+            return `left: ${x}px; top: ${y}px; right: auto; bottom: auto; height: min(720px, calc(100vh - ${y + 16}px)); max-height: calc(100vh - ${y + 16}px);`;
+        }
+
         render() {
             const settings = this.settingsManager.all();
             const compactClass = settings.appearance.compactMode ? 'hm-compact' : '';
-            const savedUi = this.settingsManager.storage.get('ui', { x: null, y: null, minimized: false });
-            const positionStyle = savedUi.x !== null && savedUi.y !== null ? `left: ${savedUi.x}px; top: ${savedUi.y}px; right: auto; bottom: auto;` : '';
+            const savedUi = this.settingsManager.storage.get('ui', { x: null, y: null, minimized: false, activePage: 'home' });
+            const positionStyle = this.getPositionStyle(savedUi);
 
             this.root.innerHTML = `
                 <style>${this.styles()}</style>
@@ -887,8 +896,8 @@
                     </div>
                 </div>
             `;
-
             this.bindDynamicEvents();
+            this.updateRuntimeNodes();
         }
 
         renderNavItem(page) {
@@ -916,21 +925,19 @@
 
         renderHomePage() {
             const state = this.stateManager.get();
-            const runtime = state.startedAt ? this.formatDuration(Date.now() - state.startedAt) : '00:00';
             const horse = state.currentHorse;
-
             return `
                 <div class="hm-grid hm-grid-2">
                     <div class="hm-card">
                         <div class="hm-card-title">Состояние</div>
                         <div class="hm-status-row">
                             <span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span>
-                            <span class="hm-muted">Время: ${runtime}</span>
+                            <span class="hm-muted">Время: <span data-runtime>${this.getRuntimeText()}</span></span>
                         </div>
                         <div class="hm-info-list">
                             <div><span>Текущая лошадь</span><strong>${this.escapeHtml(state.currentHorseName || '—')}</strong></div>
                             <div><span>Операция</span><strong>${this.escapeHtml(state.currentOperation || '—')}</strong></div>
-                            <div><span>Прогресс</span><strong>${state.progress.current} / ${state.progress.total}</strong></div>
+                            <div><span>Прогресс</span><strong>${state.progress.current} / ${this.formatTotal(state)}</strong></div>
                         </div>
                         <div class="hm-actions">
                             <button class="hm-button hm-primary" data-action="start">Старт</button>
@@ -944,9 +951,9 @@
                         </div>
                     </div>
                     <div class="hm-card hm-card-accent">
-                        <div class="hm-card-title">v0.3: гибридный табунный режим</div>
-                        <p>Скрипт уже умеет отметить текущую лошадь обработанной и перейти к следующей через кнопку на странице.</p>
-                        <p class="hm-muted">Уход и тренировки пока не выполняются — они появятся следующими этапами.</p>
+                        <div class="hm-card-title">v0.3.1: правки интерфейса</div>
+                        <p>Добавлены прокрутка внутри окна, режим лимита «Авто», запоминание открытого раздела и живое время работы.</p>
+                        <p class="hm-muted">Уход и тренировки появятся следующими этапами.</p>
                         ${horse ? this.renderHorseMini(horse) : ''}
                     </div>
                 </div>
@@ -955,13 +962,7 @@
         }
 
         renderHorseMini(horse) {
-            return `
-                <div class="hm-mini-horse">
-                    <div><span>Энергия</span><strong>${this.valueOrDash(horse.energy, '%')}</strong></div>
-                    <div><span>Здоровье</span><strong>${this.valueOrDash(horse.health, '%')}</strong></div>
-                    <div><span>Настроение</span><strong>${this.valueOrDash(horse.mood, '%')}</strong></div>
-                </div>
-            `;
+            return `<div class="hm-mini-horse"><div><span>Энергия</span><strong>${this.valueOrDash(horse.energy, '%')}</strong></div><div><span>Здоровье</span><strong>${this.valueOrDash(horse.health, '%')}</strong></div><div><span>Настроение</span><strong>${this.valueOrDash(horse.mood, '%')}</strong></div></div>`;
         }
 
         renderRunPage() {
@@ -971,7 +972,7 @@
                     <div class="hm-card">
                         <div class="hm-card-title">Гибридный прогон табуна</div>
                         <p>Текущая версия делает безопасный маршрут: текущая лошадь → анализ → следующая лошадь.</p>
-                        <div class="hm-note">Это уже кликает кнопку следующей лошади, но пока не выполняет уход, кормление, сон или тренировки.</div>
+                        <div class="hm-note">Режим «Авто» останавливается, когда скрипт снова встречает уже обработанную лошадь — это признак, что завод пройден по кругу.</div>
                         ${this.renderSettingsSection('run')}
                         ${this.renderSettingsSection('delays')}
                     </div>
@@ -979,8 +980,9 @@
                         <div class="hm-card-title">Текущий запуск</div>
                         <div class="hm-info-list">
                             <div><span>Статус</span><strong>${this.statusLabel(state.status)}</strong></div>
+                            <div><span>Время</span><strong data-runtime>${this.getRuntimeText()}</strong></div>
                             <div><span>Обработано</span><strong>${state.progress.current}</strong></div>
-                            <div><span>Лимит</span><strong>${state.progress.total || this.settingsManager.get('run', 'maxHorsesPerRun')}</strong></div>
+                            <div><span>Лимит</span><strong>${this.formatTotal(state)}</strong></div>
                             <div><span>Мягкая остановка</span><strong>${state.run.softStopRequested ? 'да' : 'нет'}</strong></div>
                         </div>
                         <div class="hm-actions">
@@ -1016,7 +1018,7 @@
                     <div class="hm-stat"><span>Переходов</span><strong>${Math.max(0, state.progress.current - 1)}</strong></div>
                     <div class="hm-stat"><span>Ошибок</span><strong>${errors}</strong></div>
                 </div>
-                <div class="hm-card"><div class="hm-card-title">Статистика</div><p>В v0.3 статистика считает обработанных лошадей в гибридном режиме. После подключения ухода здесь появятся чистки, уроки, тренировки, КСК и сон.</p></div>
+                <div class="hm-card"><div class="hm-card-title">Статистика</div><p>В v0.3.1 статистика считает обработанных лошадей в гибридном режиме. После подключения ухода здесь появятся чистки, уроки, тренировки, КСК и сон.</p></div>
             `;
         }
 
@@ -1024,7 +1026,6 @@
             const pageInfo = this.adapter.getPageInfo();
             const developerEnabled = this.settingsManager.get('developer', 'enabled');
             const analysis = this.latestAnalysis || this.adapter.analyzeHorse();
-
             return `
                 <div class="hm-grid hm-grid-2">
                     <div class="hm-card">
@@ -1069,17 +1070,7 @@
         }
 
         renderSettingsPage() {
-            return `
-                <div class="hm-card">
-                    <div class="hm-card-title">Настройки</div>
-                    ${this.renderSettingsSection('appearance')}
-                    ${this.renderSettingsSection('delays')}
-                    <div class="hm-actions hm-actions-left">
-                        <button class="hm-button hm-danger" data-action="reset-settings">Сбросить настройки</button>
-                        <button class="hm-button" data-action="clear-log">Очистить лог</button>
-                    </div>
-                </div>
-            `;
+            return `<div class="hm-card"><div class="hm-card-title">Настройки</div>${this.renderSettingsSection('appearance')}${this.renderSettingsSection('delays')}<div class="hm-actions hm-actions-left"><button class="hm-button hm-danger" data-action="reset-settings">Сбросить настройки</button><button class="hm-button" data-action="clear-log">Очистить лог</button></div></div>`;
         }
 
         renderSettingsSection(sectionId) {
@@ -1091,30 +1082,15 @@
         renderField(sectionId, field) {
             const value = this.settingsManager.get(sectionId, field.id);
             const fieldId = `hm-field-${sectionId}-${field.id}`;
-
-            if (field.type === 'checkbox') {
-                return `<label class="hm-field hm-field-checkbox" for="${fieldId}"><input id="${fieldId}" type="checkbox" data-setting-section="${sectionId}" data-setting-field="${field.id}" ${value ? 'checked' : ''}><span>${field.label}</span></label>`;
-            }
-
-            if (field.type === 'select') {
-                return `<label class="hm-field" for="${fieldId}"><span>${field.label}</span><select id="${fieldId}" data-setting-section="${sectionId}" data-setting-field="${field.id}">${field.options.map((option) => `<option value="${option.value}" ${option.value === value ? 'selected' : ''}>${option.label}</option>`).join('')}</select></label>`;
-            }
-
-            if (field.type === 'number') {
-                return `<label class="hm-field" for="${fieldId}"><span>${field.label}</span><input id="${fieldId}" type="number" value="${value}" min="${field.min}" max="${field.max}" step="${field.step || 1}" data-setting-section="${sectionId}" data-setting-field="${field.id}"></label>`;
-            }
-
+            if (field.type === 'checkbox') return `<label class="hm-field hm-field-checkbox" for="${fieldId}"><input id="${fieldId}" type="checkbox" data-setting-section="${sectionId}" data-setting-field="${field.id}" ${value ? 'checked' : ''}><span>${field.label}</span></label>`;
+            if (field.type === 'select') return `<label class="hm-field" for="${fieldId}"><span>${field.label}</span><select id="${fieldId}" data-setting-section="${sectionId}" data-setting-field="${field.id}">${field.options.map((option) => `<option value="${option.value}" ${option.value === value ? 'selected' : ''}>${option.label}</option>`).join('')}</select></label>`;
+            if (field.type === 'number') return `<label class="hm-field" for="${fieldId}"><span>${field.label}</span><input id="${fieldId}" type="number" value="${value}" min="${field.min}" max="${field.max}" step="${field.step || 1}" data-setting-section="${sectionId}" data-setting-field="${field.id}"></label>`;
             return '';
         }
 
         renderLogPanel() {
             const items = this.logger.all().slice(0, 14);
-            return `
-                <div class="hm-card hm-log-card">
-                    <div class="hm-card-header"><div class="hm-card-title">Лог</div><button class="hm-small-button" data-action="clear-log">Очистить</button></div>
-                    <div class="hm-log-list">${items.length ? items.map((item) => `<div class="hm-log-item hm-log-${item.level}"><span>${item.time}</span><strong>${this.escapeHtml(item.message)}</strong></div>`).join('') : '<div class="hm-empty">Лог пока пуст.</div>'}</div>
-                </div>
-            `;
+            return `<div class="hm-card hm-log-card"><div class="hm-card-header"><div class="hm-card-title">Лог</div><button class="hm-small-button" data-action="clear-log">Очистить</button></div><div class="hm-log-list">${items.length ? items.map((item) => `<div class="hm-log-item hm-log-${item.level}"><span>${item.time}</span><strong>${this.escapeHtml(item.message)}</strong></div>`).join('') : '<div class="hm-empty">Лог пока пуст.</div>'}</div></div>`;
         }
 
         bindEvents() {
@@ -1127,6 +1103,8 @@
             this.root.querySelectorAll('[data-page]').forEach((button) => {
                 button.addEventListener('click', () => {
                     this.activePage = button.dataset.page;
+                    const ui = this.settingsManager.storage.get('ui', {});
+                    this.settingsManager.storage.set('ui', { ...ui, activePage: this.activePage });
                     this.render();
                 });
             });
@@ -1165,18 +1143,20 @@
             const onMouseMove = (event) => {
                 if (!this.drag) return;
                 const x = Math.max(12, Math.min(window.innerWidth - 120, event.clientX - this.drag.offsetX));
-                const y = Math.max(12, Math.min(window.innerHeight - 60, event.clientY - this.drag.offsetY));
+                const y = Math.max(12, Math.min(window.innerHeight - 120, event.clientY - this.drag.offsetY));
                 app.style.left = `${x}px`;
                 app.style.top = `${y}px`;
                 app.style.right = 'auto';
                 app.style.bottom = 'auto';
+                app.style.height = `min(720px, calc(100vh - ${y + 16}px))`;
+                app.style.maxHeight = `calc(100vh - ${y + 16}px)`;
             };
 
             const onMouseUp = () => {
                 if (!this.drag) return;
                 const rect = app.getBoundingClientRect();
                 const ui = this.settingsManager.storage.get('ui', {});
-                this.settingsManager.storage.set('ui', { ...ui, x: Math.round(rect.left), y: Math.round(rect.top) });
+                this.settingsManager.storage.set('ui', { ...ui, x: Math.round(rect.left), y: Math.round(rect.top), activePage: this.activePage });
                 this.drag = null;
             };
 
@@ -1190,7 +1170,6 @@
 
         async handleAction(action) {
             const ui = this.settingsManager.storage.get('ui', { minimized: false });
-
             if (action === 'start') return this.runner.start();
             if (action === 'pause') return this.runner.pause();
             if (action === 'resume') return this.runner.resume();
@@ -1203,6 +1182,7 @@
                 this.stateManager.patch({ currentHorse: analysis, currentHorseName: analysis.name || '—', currentHorseId: analysis.id || null, pageType: this.adapter.getPageInfo().pageType });
                 this.logger.success('Анализ страницы обновлён');
                 this.activePage = 'developer';
+                this.settingsManager.storage.set('ui', { ...ui, activePage: this.activePage });
                 this.render();
                 return;
             }
@@ -1228,7 +1208,7 @@
             }
 
             if (action === 'toggle-minimize') {
-                this.settingsManager.storage.set('ui', { ...ui, minimized: !ui.minimized });
+                this.settingsManager.storage.set('ui', { ...ui, minimized: !ui.minimized, activePage: this.activePage });
                 this.render();
             }
         }
@@ -1244,11 +1224,16 @@
             return labels[status] || status;
         }
 
+        formatTotal(state) {
+            return state.run?.limitMode === 'auto' ? 'Авто' : (state.progress.total || this.settingsManager.get('run', 'maxHorsesPerRun'));
+        }
+
         formatDuration(ms) {
             const totalSeconds = Math.floor(ms / 1000);
-            const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
             const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-            return `${minutes}:${seconds}`;
+            return hours > 0 ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`;
         }
 
         valueOrDash(value, suffix = '') {
@@ -1273,14 +1258,14 @@
             return `
                 :host { all: initial; color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
                 * { box-sizing: border-box; }
-                .hm-app { --hm-bg: rgba(248, 250, 252, 0.98); --hm-panel: #ffffff; --hm-panel-soft: #f8fafc; --hm-text: #172033; --hm-muted: #64748b; --hm-border: rgba(148, 163, 184, 0.25); --hm-primary: #7c3aed; --hm-primary-2: #a855f7; --hm-primary-soft: rgba(124, 58, 237, 0.12); --hm-danger: #e11d48; --hm-success: #059669; --hm-warn: #d97706; --hm-shadow: 0 24px 80px rgba(15, 23, 42, 0.22); position: fixed; right: 24px; bottom: 24px; width: 900px; max-width: calc(100vw - 32px); height: 640px; max-height: calc(100vh - 32px); z-index: 2147483647; color: var(--hm-text); font-size: 14px; line-height: 1.45; }
+                .hm-app { --hm-bg: rgba(248, 250, 252, 0.98); --hm-panel: #ffffff; --hm-panel-soft: #f8fafc; --hm-text: #172033; --hm-muted: #64748b; --hm-border: rgba(148, 163, 184, 0.25); --hm-primary: #7c3aed; --hm-primary-2: #a855f7; --hm-primary-soft: rgba(124, 58, 237, 0.12); --hm-danger: #e11d48; --hm-success: #059669; --hm-warn: #d97706; --hm-shadow: 0 24px 80px rgba(15, 23, 42, 0.22); position: fixed; right: 24px; bottom: 24px; width: 900px; max-width: calc(100vw - 32px); height: min(720px, calc(100vh - 32px)); max-height: calc(100vh - 32px); z-index: 2147483647; color: var(--hm-text); font-size: 14px; line-height: 1.45; }
                 .hm-theme-dark { --hm-bg: rgba(15, 23, 42, 0.98); --hm-panel: #111827; --hm-panel-soft: #0f172a; --hm-text: #e5e7eb; --hm-muted: #94a3b8; --hm-border: rgba(148, 163, 184, 0.22); --hm-primary: #a78bfa; --hm-primary-2: #7c3aed; --hm-primary-soft: rgba(167, 139, 250, 0.16); --hm-danger: #fb7185; --hm-success: #34d399; --hm-warn: #fbbf24; --hm-shadow: 0 24px 80px rgba(0, 0, 0, 0.5); }
-                .hm-shell { display: grid; grid-template-columns: 220px 1fr; width: 100%; height: 100%; overflow: hidden; background: var(--hm-bg); border: 1px solid var(--hm-border); border-radius: 24px; box-shadow: var(--hm-shadow); backdrop-filter: blur(18px); }
-                .hm-minimized { width: 310px; height: 76px; }
+                .hm-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); width: 100%; height: 100%; min-height: 0; overflow: hidden; background: var(--hm-bg); border: 1px solid var(--hm-border); border-radius: 24px; box-shadow: var(--hm-shadow); backdrop-filter: blur(18px); }
+                .hm-minimized { width: 310px; height: 76px !important; max-height: 76px !important; }
                 .hm-minimized .hm-sidebar, .hm-minimized .hm-page, .hm-minimized .hm-kicker { display: none; }
                 .hm-minimized .hm-shell { display: block; border-radius: 20px; }
                 .hm-minimized .hm-content, .hm-minimized .hm-header { height: 100%; }
-                .hm-sidebar { padding: 18px; border-right: 1px solid var(--hm-border); background: linear-gradient(180deg, var(--hm-primary-soft), transparent 55%); }
+                .hm-sidebar { min-height: 0; overflow: auto; padding: 18px; border-right: 1px solid var(--hm-border); background: linear-gradient(180deg, var(--hm-primary-soft), transparent 55%); }
                 .hm-brand { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; cursor: move; user-select: none; }
                 .hm-brand-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; background: var(--hm-primary-soft); font-size: 22px; }
                 .hm-brand-title { font-weight: 800; letter-spacing: -0.03em; }
@@ -1289,11 +1274,13 @@
                 .hm-nav-item, .hm-button, .hm-icon-button, .hm-small-button { border: 0; font: inherit; color: inherit; cursor: pointer; }
                 .hm-nav-item { display: flex; gap: 10px; align-items: center; width: 100%; padding: 10px 12px; border-radius: 14px; background: transparent; color: var(--hm-muted); text-align: left; transition: 0.18s ease; }
                 .hm-nav-item:hover, .hm-nav-item.hm-active { color: var(--hm-text); background: var(--hm-primary-soft); }
-                .hm-content { display: flex; flex-direction: column; min-width: 0; }
-                .hm-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px; border-bottom: 1px solid var(--hm-border); cursor: move; user-select: none; }
+                .hm-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+                .hm-header { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px; border-bottom: 1px solid var(--hm-border); cursor: move; user-select: none; }
                 .hm-header h1 { margin: 2px 0 0; font-size: 22px; line-height: 1.1; letter-spacing: -0.04em; }
                 .hm-window-actions, .hm-actions { display: flex; gap: 8px; align-items: center; }
-                .hm-page { flex: 1; overflow: auto; padding: 20px 22px; }
+                .hm-page { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 20px 22px; scrollbar-width: thin; scrollbar-color: var(--hm-primary) transparent; }
+                .hm-page::-webkit-scrollbar, .hm-sidebar::-webkit-scrollbar, .hm-log-list::-webkit-scrollbar, .hm-details pre::-webkit-scrollbar { width: 10px; height: 10px; }
+                .hm-page::-webkit-scrollbar-thumb, .hm-sidebar::-webkit-scrollbar-thumb, .hm-log-list::-webkit-scrollbar-thumb, .hm-details pre::-webkit-scrollbar-thumb { background: var(--hm-primary-soft); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
                 .hm-grid { display: grid; gap: 14px; margin-bottom: 14px; }
                 .hm-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .hm-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1308,8 +1295,8 @@
                 .hm-status-error, .hm-log-error { color: var(--hm-danger); }
                 .hm-info-list, .hm-dev-grid, .hm-mini-horse { display: grid; gap: 8px; margin: 12px 0 16px; }
                 .hm-info-list div, .hm-dev-grid div, .hm-mini-horse div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--hm-border); }
-                .hm-dev-grid div { display: grid; grid-template-columns: 130px 1fr; }
-                .hm-dev-grid strong, .hm-info-list strong { overflow-wrap: anywhere; }
+                .hm-dev-grid div { display: grid; grid-template-columns: 130px minmax(0, 1fr); }
+                .hm-dev-grid strong, .hm-info-list strong { overflow-wrap: anywhere; min-width: 0; }
                 .hm-info-list span, .hm-dev-grid span, .hm-stat span, .hm-mini-horse span { color: var(--hm-muted); }
                 .hm-actions { justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
                 .hm-actions-left { justify-content: flex-start; }
@@ -1322,20 +1309,21 @@
                 .hm-danger { background: rgba(225, 29, 72, 0.12); color: var(--hm-danger); }
                 .hm-note, .hm-empty { margin-top: 12px; padding: 12px; border-radius: 14px; background: var(--hm-panel-soft); color: var(--hm-muted); }
                 .hm-settings-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--hm-border); }
-                .hm-field { display: grid; grid-template-columns: 1fr minmax(150px, 210px); align-items: center; gap: 12px; margin: 10px 0; }
+                .hm-field { display: grid; grid-template-columns: 1fr minmax(150px, 230px); align-items: center; gap: 12px; margin: 10px 0; }
                 .hm-field-checkbox { display: flex; justify-content: flex-start; }
                 .hm-field input, .hm-field select { width: 100%; padding: 8px 10px; border: 1px solid var(--hm-border); border-radius: 12px; background: var(--hm-panel-soft); color: var(--hm-text); font: inherit; }
                 .hm-field-checkbox input { width: auto; accent-color: var(--hm-primary); }
                 .hm-log-list { display: grid; gap: 7px; max-height: 210px; overflow: auto; }
-                .hm-log-item { display: grid; grid-template-columns: 72px 1fr; gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--hm-panel-soft); }
+                .hm-log-item { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--hm-panel-soft); }
                 .hm-log-item span { color: var(--hm-muted); font-size: 12px; }
+                .hm-log-item strong { overflow-wrap: anywhere; }
                 .hm-stat { display: grid; gap: 4px; }
                 .hm-stat strong { font-size: 28px; letter-spacing: -0.05em; }
                 .hm-details { margin-top: 12px; color: var(--hm-muted); }
                 .hm-details pre { max-height: 150px; overflow: auto; white-space: pre-wrap; padding: 12px; border-radius: 14px; background: var(--hm-panel-soft); color: var(--hm-text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
                 .hm-compact .hm-sidebar { padding: 14px; }
                 .hm-compact .hm-page { padding: 14px; }
-                @media (max-width: 760px) { .hm-app { left: 12px !important; right: 12px !important; bottom: 12px; width: auto; height: min(680px, calc(100vh - 24px)); } .hm-shell { grid-template-columns: 1fr; } .hm-sidebar { border-right: 0; border-bottom: 1px solid var(--hm-border); } .hm-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hm-grid-2, .hm-grid-3 { grid-template-columns: 1fr; } }
+                @media (max-width: 760px) { .hm-app { left: 12px !important; right: 12px !important; bottom: 12px; width: auto; height: min(680px, calc(100vh - 24px)); max-height: calc(100vh - 24px); } .hm-shell { grid-template-columns: 1fr; } .hm-sidebar { border-right: 0; border-bottom: 1px solid var(--hm-border); max-height: 220px; } .hm-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hm-grid-2, .hm-grid-3 { grid-template-columns: 1fr; } }
             `;
         }
     }
@@ -1370,11 +1358,12 @@
         start() {
             const pageInfo = this.adapter.getPageInfo();
             const analysis = pageInfo.pageType === PageType.HORSE ? this.adapter.analyzeHorse() : null;
+            const currentState = this.stateManager.get();
             this.stateManager.patch({
                 pageType: pageInfo.pageType,
                 currentHorse: analysis,
-                currentHorseName: analysis?.name || this.stateManager.get().currentHorseName || '—',
-                currentHorseId: analysis?.id || this.stateManager.get().currentHorseId || null,
+                currentHorseName: analysis?.name || currentState.currentHorseName || '—',
+                currentHorseId: analysis?.id || currentState.currentHorseId || null,
             });
             this.storage.set('latestAnalysis', analysis);
             this.ui.mount();
