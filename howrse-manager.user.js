@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.4.1
-// @description  Умный менеджер табуна для Ловади / Howrse. v0.4.1: миссии без привязки к тексту и кормление с нормами.
+// @version      0.4.2
+// @description  Умный менеджер табуна для Ловади / Howrse. v0.4.2: кормление считает остаток нормы как рекомендовано минус уже съедено.
 // @author       less-exe
 // @match        https://www.lowadi.com/*
 // @match        http://www.lowadi.com/*
@@ -15,7 +15,7 @@
     const APP = {
         id: 'howrse-manager',
         name: 'Howrse Manager',
-        version: '0.4.1',
+        version: '0.4.2',
         storagePrefix: 'hm:v0.4',
     };
 
@@ -198,14 +198,15 @@
             const panel = await this.waitFor(() => this.findFeedPanel(), 6500, 200);
             if (!panel) return { success: false, reason: 'Окно кормления не найдено' };
             const needs = this.extractFeedNeeds(panel);
-            logger?.info(`Кормление: норма корма ${needs[0]?.remaining ?? '—'}, овса ${needs[1]?.remaining ?? '—'}`);
+            logger?.info(`Кормление: корм ${needs[0]?.amount ?? '—'} (было ${needs[0]?.eaten ?? '—'} / ${needs[0]?.total ?? '—'}), овес ${needs[1]?.amount ?? '—'} (было ${needs[1]?.eaten ?? '—'} / ${needs[1]?.total ?? '—'})`);
             const sliders = this.findFeedSliders(panel);
             for (let i = 0; i < Math.min(needs.length, 2); i += 1) {
                 const need = needs[i];
-                if (!need || need.remaining <= 0) continue;
+                const amount = need?.amount ?? need?.remaining ?? 0;
+                if (!need || amount <= 0) continue;
                 const slider = sliders[i] || sliders[0];
                 if (!slider) return { success: false, reason: 'Ползунок корма не найден' };
-                this.setSliderValue(slider, need.remaining, need.max || need.total || need.remaining);
+                this.setSliderValue(slider, amount, need.max || need.total || amount);
                 await delayManager.random(250, 650);
             }
             const submit = this.findActionControl(['Дать поесть', 'Покормить', 'Накормить', 'Valider', 'Donner à manger', 'Feed'], { root: panel }) || this.findSubmitByText(panel, ['Дать поесть', 'Покормить', 'Накормить']);
@@ -222,7 +223,12 @@
         }
         extractFeedNeeds(panel) {
             const text = this.normalize(panel.innerText || panel.textContent || '');
-            const matches = [...text.matchAll(/(\d+)\s*\/\s*(\d+)/g)].map((match) => ({ eaten: Number(match[1]), total: Number(match[2]), remaining: Math.max(0, Number(match[2]) - Number(match[1])) }));
+            const matches = [...text.matchAll(/(\d+)\s*\/\s*(\d+)/g)].map((match) => {
+                const eaten = Number(match[1]);
+                const total = Number(match[2]);
+                const amount = Math.max(0, total - eaten);
+                return { eaten, total, recommended: total, remaining: amount, amount };
+            });
             const maxValues = this.extractSliderMaxValues(panel);
             return matches.slice(0, 2).map((item, index) => ({ ...item, max: Math.max(item.total, maxValues[index] || item.total) }));
         }
@@ -335,7 +341,7 @@
         positionStyle(ui) { if (ui.x === null || ui.x === undefined || ui.y === null || ui.y === undefined) return ''; const x = Math.max(12, Math.min(innerWidth - 180, Number(ui.x))); const y = Math.max(12, Math.min(innerHeight - 120, Number(ui.y))); return `left:${x}px;top:${y}px;right:auto;bottom:auto;height:min(720px,calc(100vh - ${y + 16}px));max-height:calc(100vh - ${y + 16}px);`; }
         title() { const page = this.pages.find((p) => p.id === this.activePage); return page ? `${page.icon} ${page.label}` : APP.name; }
         renderPage() { return ({ home: () => this.renderHome(), run: () => this.renderRun(), developer: () => this.renderDeveloper(), settings: () => this.renderSettings() }[this.activePage] || (() => this.renderHome()))(); }
-        renderHome() { const state = this.stateManager.get(); return `<div class="hm-grid hm-grid-2"><div class="hm-card"><div class="hm-card-title">Состояние</div><div class="hm-status-row"><span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span><span class="hm-muted">Время: <span data-runtime>${this.getRuntimeText()}</span></span></div>${this.infoList([['Текущая лошадь', state.currentHorseName || '—'], ['Операция', state.currentOperation || '—'], ['Прогресс', `${state.progress.current} / ${this.formatTotal(state)}`], ['Действий ухода', state.stats.careActions || 0]])}${this.mainButtons()}</div><div class="hm-card hm-card-accent"><div class="hm-card-title">v0.4.1: миссия и кормление</div><p>Миссия ищется по блоку «Миссия», а не только по тексту кнопки. Для корма открывается окно выбора фуража, выставляются остатки нормы корма и овса, затем нажимается «Дать поесть».</p></div></div>${this.logPanel()}`; }
+        renderHome() { const state = this.stateManager.get(); return `<div class="hm-grid hm-grid-2"><div class="hm-card"><div class="hm-card-title">Состояние</div><div class="hm-status-row"><span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span><span class="hm-muted">Время: <span data-runtime>${this.getRuntimeText()}</span></span></div>${this.infoList([['Текущая лошадь', state.currentHorseName || '—'], ['Операция', state.currentOperation || '—'], ['Прогресс', `${state.progress.current} / ${this.formatTotal(state)}`], ['Действий ухода', state.stats.careActions || 0]])}${this.mainButtons()}</div><div class="hm-card hm-card-accent"><div class="hm-card-title">v0.4.2: кормление по остатку нормы</div><p>Кормление трактует значения Ловади как «уже покормлено / рекомендуемая норма» и выставляет только недостающий остаток: второе число минус первое.</p></div></div>${this.logPanel()}`; }
         renderRun() { return `<div class="hm-grid hm-grid-2"><div class="hm-card"><div class="hm-card-title">Гибридный прогон табуна</div><p>Маршрут: текущая лошадь → базовый уход → отметка обработки → следующая лошадь.</p>${this.settingsSection('run')}${this.settingsSection('care')}${this.settingsSection('delays')}</div><div class="hm-card"><div class="hm-card-title">Управление</div>${this.mainButtons()}</div></div>`; }
         renderDeveloper() { const pageInfo = this.adapter.getPageInfo(); const analysis = this.latestAnalysis || this.adapter.analyzeHorse(); return `<div class="hm-grid hm-grid-2"><div class="hm-card"><div class="hm-card-title">Диагностика страницы</div>${this.settingsSection('developer')}${this.infoList([['Домен', pageInfo.hostname], ['Тип страницы', pageInfo.pageTypeLabel], ['Адаптер', pageInfo.adapter], ['Страница лошади', pageInfo.pageType === PageType.HORSE ? 'да' : 'нет']])}<div class="hm-actions hm-actions-left"><button class="hm-button hm-primary" data-action="analyze">Обновить анализ</button></div></div><div class="hm-card"><div class="hm-card-title">Найденные данные</div>${this.renderAnalysis(analysis)}<div class="hm-card-title hm-subtitle">Кнопки ухода</div>${this.careDiagnostics()}</div></div>`; }
         renderAnalysis(a) { if (!a) return '<div class="hm-empty">Пока нет анализа.</div>'; return `${this.infoList([['ID', a.id || '—'], ['Имя', a.name || '—'], ['Энергия', this.valueOrDash(a.energy, '%')], ['Здоровье', this.valueOrDash(a.health, '%')], ['Настроение', this.valueOrDash(a.mood, '%')], ['Возраст', a.age || '—'], ['Пол', a.sex || '—'], ['Кнопка следующей лошади', a.hasNextHorseButton ? 'найдена' : 'не найдена'], ['Селектор кнопки', a.nextHorseButtonSelector || '—']])}<details class="hm-details"><summary>Сырой текст страницы</summary><pre>${this.escapeHtml(a.pageTextSample || '')}</pre></details>`; }
