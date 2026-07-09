@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.3.1
-// @description  Умный менеджер табуна для Ловади / Howrse. v0.3.1: улучшения табунного режима и интерфейса.
+// @version      0.4.0
+// @description  Умный менеджер табуна для Ловади / Howrse. v0.4: базовый уход и гибридный прогон.
 // @author       less-exe
 // @match        https://www.lowadi.com/*
 // @match        http://www.lowadi.com/*
@@ -15,7 +15,7 @@
     const APP = {
         id: 'howrse-manager',
         name: 'Howrse Manager',
-        version: '0.3.1',
+        version: '0.4.0',
         storagePrefix: 'hm:v0.1',
     };
 
@@ -43,88 +43,66 @@
         [PageType.UNKNOWN]: 'Неизвестная страница',
     };
 
+    const CareActions = [
+        { id: 'brush', label: 'Чистка', operation: 'Чистка', words: ['Чистить', 'Чистка'] },
+        { id: 'lesson', label: 'Урок / миссия', operation: 'Урок / миссия', words: ['Урок', 'Миссия', 'Заготовка леса'] },
+        { id: 'stroke', label: 'Ласка', operation: 'Ласка', words: ['Ласкать', 'Ласка'] },
+        { id: 'water', label: 'Вода', operation: 'Вода', words: ['Поить', 'Вода'] },
+        { id: 'feed', label: 'Корм', operation: 'Корм', words: ['Кормить', 'Корм'] },
+        { id: 'sleep', label: 'Сон', operation: 'Сон', words: ['Отправить спать', 'Спать', 'Сон'] },
+    ];
+
     const settingsSchema = [
         {
             id: 'appearance',
             title: 'Внешний вид',
             description: 'Тема и поведение окна приложения.',
             fields: [
-                {
-                    id: 'theme',
-                    type: 'select',
-                    label: 'Тема',
-                    default: 'auto',
-                    options: [
-                        { value: 'auto', label: 'Авто' },
-                        { value: 'light', label: 'Светлая' },
-                        { value: 'dark', label: 'Тёмная' },
-                    ],
-                },
-                {
-                    id: 'compactMode',
-                    type: 'checkbox',
-                    label: 'Компактный режим',
-                    default: false,
-                },
+                { id: 'theme', type: 'select', label: 'Тема', default: 'auto', options: [
+                    { value: 'auto', label: 'Авто' },
+                    { value: 'light', label: 'Светлая' },
+                    { value: 'dark', label: 'Тёмная' },
+                ] },
+                { id: 'compactMode', type: 'checkbox', label: 'Компактный режим', default: false },
             ],
         },
         {
             id: 'run',
             title: 'Прогон',
-            description: 'Гибридный режим: текущая лошадь → анализ → следующая лошадь.',
+            description: 'Гибридный режим: текущая лошадь → уход → следующая лошадь.',
             fields: [
-                {
-                    id: 'limitMode',
-                    type: 'select',
-                    label: 'Максимум лошадей за запуск',
-                    default: 'manual',
-                    options: [
-                        { value: 'manual', label: 'Ручной лимит' },
-                        { value: 'auto', label: 'Авто — до конца завода' },
-                    ],
-                },
-                {
-                    id: 'maxHorsesPerRun',
-                    type: 'number',
-                    label: 'Лимит при ручном режиме',
-                    default: 25,
-                    min: 1,
-                    max: 5000,
-                    step: 1,
-                },
-                {
-                    id: 'stopAfterCurrentHorse',
-                    type: 'checkbox',
-                    label: 'Мягкая остановка после текущей лошади',
-                    default: false,
-                },
-                {
-                    id: 'energyLimit',
-                    type: 'number',
-                    label: 'Будущий остаток энергии для активности, %',
-                    default: 20,
-                    min: 0,
-                    max: 100,
-                    step: 1,
-                },
+                { id: 'limitMode', type: 'select', label: 'Максимум лошадей за запуск', default: 'manual', options: [
+                    { value: 'manual', label: 'Ручной лимит' },
+                    { value: 'auto', label: 'Авто — до конца завода' },
+                ] },
+                { id: 'maxHorsesPerRun', type: 'number', label: 'Лимит при ручном режиме', default: 25, min: 1, max: 5000, step: 1 },
+                { id: 'stopAfterCurrentHorse', type: 'checkbox', label: 'Мягкая остановка после текущей лошади', default: false },
+                { id: 'energyLimit', type: 'number', label: 'Будущий остаток энергии для активности, %', default: 20, min: 0, max: 100, step: 1 },
+            ],
+        },
+        {
+            id: 'care',
+            title: 'Уход',
+            description: 'Базовые действия v0.4. Порядок: чистка → урок/миссия → ласка → вода → корм → сон.',
+            fields: [
+                { id: 'brush', type: 'checkbox', label: 'Чистка', default: true },
+                { id: 'lesson', type: 'checkbox', label: 'Урок / миссия', default: true },
+                { id: 'stroke', type: 'checkbox', label: 'Ласка', default: true },
+                { id: 'water', type: 'checkbox', label: 'Вода', default: true },
+                { id: 'feed', type: 'checkbox', label: 'Корм', default: true },
+                { id: 'sleep', type: 'checkbox', label: 'Сон', default: true },
             ],
         },
         {
             id: 'delays',
             title: 'Задержки',
-            description: 'Пауза перед переходом к следующей лошади.',
+            description: 'Паузы между действиями и перед переходом к следующей лошади.',
             fields: [
-                {
-                    id: 'mode',
-                    type: 'select',
-                    label: 'Режим задержек',
-                    default: 'medium',
-                    options: [
-                        { value: 'fast', label: 'Быстро' },
-                        { value: 'medium', label: 'Средне' },
-                        { value: 'slow', label: 'Медленно' },
-                    ],
-                },
+                { id: 'mode', type: 'select', label: 'Режим задержек', default: 'medium', options: [
+                    { value: 'fast', label: 'Быстро' },
+                    { value: 'medium', label: 'Средне' },
+                    { value: 'slow', label: 'Медленно' },
+                ] },
             ],
         },
         {
@@ -132,53 +110,31 @@
             title: 'Разработчик',
             description: 'Помогает тестировать поиск страниц, данных и кнопок.',
             fields: [
-                {
-                    id: 'enabled',
-                    type: 'checkbox',
-                    label: 'Включить режим разработчика',
-                    default: true,
-                },
+                { id: 'enabled', type: 'checkbox', label: 'Включить режим разработчика', default: true },
             ],
         },
     ];
 
     class EventBus {
-        constructor() {
-            this.listeners = new Map();
-        }
-
+        constructor() { this.listeners = new Map(); }
         on(eventName, callback) {
             if (!this.listeners.has(eventName)) this.listeners.set(eventName, new Set());
             this.listeners.get(eventName).add(callback);
             return () => this.off(eventName, callback);
         }
-
-        off(eventName, callback) {
-            this.listeners.get(eventName)?.delete(callback);
-        }
-
+        off(eventName, callback) { this.listeners.get(eventName)?.delete(callback); }
         emit(eventName, payload) {
             const callbacks = this.listeners.get(eventName);
             if (!callbacks) return;
             callbacks.forEach((callback) => {
-                try {
-                    callback(payload);
-                } catch (error) {
-                    console.error(`[${APP.name}] Event handler error`, error);
-                }
+                try { callback(payload); } catch (error) { console.error(`[${APP.name}] Event handler error`, error); }
             });
         }
     }
 
     class Storage {
-        constructor(prefix) {
-            this.prefix = prefix;
-        }
-
-        key(name) {
-            return `${this.prefix}:${name}`;
-        }
-
+        constructor(prefix) { this.prefix = prefix; }
+        key(name) { return `${this.prefix}:${name}`; }
         get(name, fallback = null) {
             try {
                 const value = window.localStorage.getItem(this.key(name));
@@ -188,13 +144,9 @@
                 return fallback;
             }
         }
-
         set(name, value) {
-            try {
-                window.localStorage.setItem(this.key(name), JSON.stringify(value));
-            } catch (error) {
-                console.warn(`[${APP.name}] Failed to write storage key: ${name}`, error);
-            }
+            try { window.localStorage.setItem(this.key(name), JSON.stringify(value)); }
+            catch (error) { console.warn(`[${APP.name}] Failed to write storage key: ${name}`, error); }
         }
     }
 
@@ -202,10 +154,9 @@
         constructor(eventBus, storage) {
             this.eventBus = eventBus;
             this.storage = storage;
-            this.maxItems = 300;
+            this.maxItems = 400;
             this.items = this.storage.get('log', []);
         }
-
         add(level, message, details = null) {
             const item = {
                 id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -219,21 +170,12 @@
             this.storage.set('log', this.items);
             this.eventBus.emit('log:changed', this.items);
         }
-
         info(message, details = null) { this.add('info', message, details); }
         success(message, details = null) { this.add('success', message, details); }
         warn(message, details = null) { this.add('warn', message, details); }
         error(message, details = null) { this.add('error', message, details); }
-
-        clear() {
-            this.items = [];
-            this.storage.set('log', this.items);
-            this.eventBus.emit('log:changed', this.items);
-        }
-
-        all() {
-            return [...this.items];
-        }
+        clear() { this.items = []; this.storage.set('log', this.items); this.eventBus.emit('log:changed', this.items); }
+        all() { return [...this.items]; }
     }
 
     class SettingsManager {
@@ -244,22 +186,15 @@
             this.defaults = this.createDefaults(schema);
             this.settings = this.load();
         }
-
         createDefaults(schema) {
-            const defaults = { version: 4 };
+            const defaults = { version: 5 };
             schema.forEach((section) => {
                 defaults[section.id] = {};
-                section.fields.forEach((field) => {
-                    defaults[section.id][field.id] = field.default;
-                });
+                section.fields.forEach((field) => { defaults[section.id][field.id] = field.default; });
             });
             return defaults;
         }
-
-        load() {
-            return this.mergeDeep(this.defaults, this.storage.get('settings', {}));
-        }
-
+        load() { return this.mergeDeep(this.defaults, this.storage.get('settings', {})); }
         mergeDeep(base, override) {
             const output = Array.isArray(base) ? [...base] : { ...base };
             Object.keys(override || {}).forEach((key) => {
@@ -271,28 +206,19 @@
             });
             return output;
         }
-
-        get(sectionId, fieldId = null) {
-            if (!fieldId) return this.settings[sectionId];
-            return this.settings?.[sectionId]?.[fieldId];
-        }
-
+        get(sectionId, fieldId = null) { return fieldId ? this.settings?.[sectionId]?.[fieldId] : this.settings[sectionId]; }
         set(sectionId, fieldId, value) {
             if (!this.settings[sectionId]) this.settings[sectionId] = {};
             this.settings[sectionId][fieldId] = value;
             this.storage.set('settings', this.settings);
             this.eventBus.emit('settings:changed', this.settings);
         }
-
         reset() {
             this.settings = this.createDefaults(this.schema);
             this.storage.set('settings', this.settings);
             this.eventBus.emit('settings:changed', this.settings);
         }
-
-        all() {
-            return this.settings;
-        }
+        all() { return this.settings; }
     }
 
     class StateManager {
@@ -301,7 +227,6 @@
             this.storage = storage;
             this.state = this.mergeState(this.createInitialState(), this.storage.get('state', {}));
         }
-
         createInitialState() {
             return {
                 status: AppStatus.IDLE,
@@ -315,81 +240,64 @@
                 lastActionAt: null,
                 pageType: PageType.UNKNOWN,
                 currentHorse: null,
-                run: {
-                    processedIds: [],
-                    softStopRequested: false,
-                    lastError: null,
-                    limitMode: 'manual',
-                },
+                stats: { careActions: 0, errors: 0 },
+                run: { processedIds: [], softStopRequested: false, lastError: null, limitMode: 'manual' },
             };
         }
-
         mergeState(base, saved) {
             return {
                 ...base,
                 ...saved,
                 progress: { ...base.progress, ...(saved.progress || {}) },
+                stats: { ...base.stats, ...(saved.stats || {}) },
                 run: { ...base.run, ...(saved.run || {}) },
             };
         }
-
-        get() {
-            return JSON.parse(JSON.stringify(this.state));
-        }
-
+        get() { return JSON.parse(JSON.stringify(this.state)); }
         patch(partial) {
             this.state = this.mergeState(this.state, partial);
             this.storage.set('state', this.state);
             this.eventBus.emit('state:changed', this.get());
         }
-
         start(total = 0, limitMode = 'manual') {
             this.patch({
                 status: AppStatus.RUNNING,
                 mode: 'hybrid-herd',
                 currentOperation: 'Запуск табунного режима',
                 progress: { current: 0, total },
+                stats: { careActions: 0, errors: 0 },
                 startedAt: Date.now(),
                 finishedAt: null,
                 lastActionAt: Date.now(),
-                run: {
-                    processedIds: [],
-                    softStopRequested: false,
-                    lastError: null,
-                    limitMode,
-                },
+                run: { processedIds: [], softStopRequested: false, lastError: null, limitMode },
             });
         }
-
-        pause() {
-            this.patch({ status: AppStatus.PAUSED, currentOperation: 'Пауза', lastActionAt: Date.now() });
+        pause() { this.patch({ status: AppStatus.PAUSED, currentOperation: 'Пауза', lastActionAt: Date.now() }); }
+        resume() { this.patch({ status: AppStatus.RUNNING, currentOperation: 'Продолжение работы', lastActionAt: Date.now(), finishedAt: null }); }
+        stop(operation = 'Остановлено', resetRun = false) {
+            const patch = { status: AppStatus.STOPPED, mode: null, currentOperation: operation, finishedAt: Date.now(), lastActionAt: Date.now() };
+            if (resetRun) {
+                patch.progress = { current: 0, total: 0 };
+                patch.startedAt = null;
+                patch.finishedAt = null;
+                patch.stats = { careActions: 0, errors: 0 };
+                patch.run = { processedIds: [], softStopRequested: false, lastError: null, limitMode: this.state.run.limitMode || 'manual' };
+            }
+            this.patch(patch);
         }
-
-        resume() {
-            this.patch({ status: AppStatus.RUNNING, currentOperation: 'Продолжение работы', lastActionAt: Date.now(), finishedAt: null });
-        }
-
-        stop(operation = 'Остановлено') {
-            this.patch({ status: AppStatus.STOPPED, mode: null, currentOperation: operation, finishedAt: Date.now(), lastActionAt: Date.now() });
-        }
-
         error(message) {
             this.patch({
                 status: AppStatus.ERROR,
                 currentOperation: 'Ошибка',
                 finishedAt: Date.now(),
                 lastActionAt: Date.now(),
+                stats: { ...this.state.stats, errors: (this.state.stats.errors || 0) + 1 },
                 run: { ...this.state.run, lastError: message },
             });
         }
-
         requestSoftStop() {
-            this.patch({
-                run: { ...this.state.run, softStopRequested: true },
-                currentOperation: 'Мягкая остановка после текущей лошади',
-            });
+            this.patch({ run: { ...this.state.run, softStopRequested: true }, currentOperation: 'Мягкая остановка после текущей лошади' });
         }
-
         markHorseProcessed(horse) {
             const id = horse?.id || `unknown-${Date.now()}`;
             const processedIds = [...new Set([...(this.state.run.processedIds || []), id])];
@@ -402,33 +310,24 @@
                 lastActionAt: Date.now(),
             });
         }
+        incrementCareActions() {
+            this.patch({ stats: { ...this.state.stats, careActions: (this.state.stats.careActions || 0) + 1 }, lastActionAt: Date.now() });
+        }
     }
 
     class DelayManager {
-        constructor(settingsManager) {
-            this.settingsManager = settingsManager;
-        }
-
-        wait(ms) {
-            return new Promise((resolve) => window.setTimeout(resolve, ms));
-        }
-
+        constructor(settingsManager) { this.settingsManager = settingsManager; }
+        wait(ms) { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
         getRange() {
             const mode = this.settingsManager.get('delays', 'mode');
-            const ranges = {
-                fast: [900, 1800],
-                medium: [1800, 3600],
-                slow: [3600, 7000],
-            };
+            const ranges = { fast: [700, 1400], medium: [1600, 3200], slow: [3200, 6500] };
             return ranges[mode] || ranges.medium;
         }
-
         random(min = null, max = null) {
             const range = this.getRange();
             const from = min ?? range[0];
             const to = max ?? range[1];
-            const duration = Math.floor(Math.random() * (to - from + 1)) + from;
-            return this.wait(duration);
+            return this.wait(Math.floor(Math.random() * (to - from + 1)) + from);
         }
     }
 
@@ -445,34 +344,21 @@
     }
 
     class SelectorManager {
-        constructor(selectors) {
-            this.selectors = selectors;
-            this.lastMatches = {};
-        }
-
+        constructor(selectors) { this.selectors = selectors; this.lastMatches = {}; }
         find(key, root = document) {
             const variants = this.selectors[key] || [];
             for (const selector of variants) {
                 const element = root.querySelector(selector);
-                if (element) {
-                    this.lastMatches[key] = selector;
-                    return element;
-                }
+                if (element) { this.lastMatches[key] = selector; return element; }
             }
             this.lastMatches[key] = null;
             return null;
         }
-
-        getLastMatches() {
-            return { ...this.lastMatches };
-        }
+        getLastMatches() { return { ...this.lastMatches }; }
     }
 
     class HorseParser {
-        constructor(selectorManager) {
-            this.selectorManager = selectorManager;
-        }
-
+        constructor(selectorManager) { this.selectorManager = selectorManager; }
         parse() {
             const text = this.normalize(document.body?.innerText || '');
             const id = this.getHorseId();
@@ -483,50 +369,26 @@
             const age = this.getAge(text);
             const sex = this.getSex(text, name);
             const nextButton = this.findNextHorseButton();
-
             return {
-                id,
-                name,
-                energy,
-                health,
-                mood,
-                age,
-                sex,
+                id, name, energy, health, mood, age, sex,
                 hasNextHorseButton: Boolean(nextButton),
                 nextHorseButtonSelector: this.describeElement(nextButton),
                 pageTextSample: text.slice(0, 700),
                 selectors: this.selectorManager.getLastMatches(),
             };
         }
-
-        normalize(value) {
-            return String(value || '').replace(/\s+/g, ' ').trim();
-        }
-
-        getHorseId() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('id') || null;
-        }
-
+        normalize(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+        getHorseId() { return new URLSearchParams(window.location.search).get('id') || null; }
         getHorseName(text) {
-            const title = document.title
-                .replace(/\s*-\s*Ловади\s*$/i, '')
-                .replace(/\s*-\s*Howrse\s*$/i, '')
-                .trim();
+            const title = document.title.replace(/\s*-\s*Ловади\s*$/i, '').replace(/\s*-\s*Howrse\s*$/i, '').trim();
             if (title && !/^(lowadi|howrse|ловади)$/i.test(title)) return title;
-
-            const nameSelectors = ['#characteristics-body-content h1', '.horse-name', '[class*="horse"] h1', 'h1', 'h2'];
-            for (const selector of nameSelectors) {
-                const element = document.querySelector(selector);
-                const candidate = this.normalize(element?.textContent || '');
+            for (const selector of ['#characteristics-body-content h1', '.horse-name', '[class*="horse"] h1', 'h1', 'h2']) {
+                const candidate = this.normalize(document.querySelector(selector)?.textContent || '');
                 if (candidate && candidate.length <= 80) return candidate;
             }
-
             const byTabun = text.match(/(?:Табун\s+[^\s]+\s+)?((?:жен|муж)\s+[0-9.,]+)/i);
-            if (byTabun) return byTabun[1];
-            return '—';
+            return byTabun ? byTabun[1] : '—';
         }
-
         getPercentNearLabel(text, label) {
             const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const direct = text.match(new RegExp(`${escaped}\\s*(\\d{1,3})\\s*%`, 'i'));
@@ -535,7 +397,6 @@
             if (reversed) return Math.min(100, Number(reversed[1]));
             return null;
         }
-
         getAge(text) {
             const candidates = [
                 text.match(/Возраст\s*:?\s*([^|]{1,35}?)(?= Пол| Энергия| Здоровье| Настроение|$)/i),
@@ -548,14 +409,12 @@
             }
             return null;
         }
-
         getSex(text, name) {
             const source = `${name} ${text}`.toLowerCase();
             if (/\bжен\b|кобыла|кобылиц/.test(source)) return 'Женский';
             if (/\bмуж\b|жеребец|мерин/.test(source)) return 'Мужской';
             return null;
         }
-
         findNextHorseButton() {
             const candidates = [
                 ...document.querySelectorAll('a[href*="go=next"], button[onclick*="go=next"], input[onclick*="go=next"]'),
@@ -566,7 +425,6 @@
             if (byHref) return byHref;
             const byText = candidates.find((element) => /следующ|suivant|next/i.test(this.normalize(element.textContent || element.title || element.getAttribute('aria-label') || '')));
             if (byText) return byText;
-
             const rightArrowLinks = [...document.querySelectorAll('a')].filter((element) => {
                 const rect = element.getBoundingClientRect();
                 const text = this.normalize(element.textContent || element.title || '');
@@ -576,7 +434,6 @@
             });
             return rightArrowLinks[rightArrowLinks.length - 1] || null;
         }
-
         describeElement(element) {
             if (!element) return null;
             if (element.id) return `#${element.id}`;
@@ -594,24 +451,58 @@
             this.selectorManager = new SelectorManager({});
             this.horseParser = new HorseParser(this.selectorManager);
         }
-
         getName() { return 'BaseAdapter'; }
         isSupported() { return false; }
-
         getPageInfo() {
             const pageType = this.routeManager.getCurrentPageType();
-            return {
-                hostname: window.location.hostname,
-                url: window.location.href,
-                pageType,
-                pageTypeLabel: PageLabels[pageType] || PageLabels[PageType.UNKNOWN],
-                adapter: this.getName(),
-                supported: this.isSupported(),
-            };
+            return { hostname: window.location.hostname, url: window.location.href, pageType, pageTypeLabel: PageLabels[pageType] || PageLabels[PageType.UNKNOWN], adapter: this.getName(), supported: this.isSupported() };
         }
-
         analyzeHorse() { return this.horseParser.parse(); }
         findNextHorseButton() { return this.horseParser.findNextHorseButton(); }
+        normalize(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+        getElementText(element) {
+            return this.normalize([
+                element.textContent,
+                element.getAttribute?.('title'),
+                element.getAttribute?.('aria-label'),
+                element.getAttribute?.('value'),
+                element.getAttribute?.('alt'),
+            ].filter(Boolean).join(' '));
+        }
+        isVisible(element) {
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 1 && rect.height > 1 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0.15;
+        }
+        isDisabled(element) {
+            if (!element) return true;
+            const disabledText = `${element.className || ''} ${element.getAttribute('class') || ''} ${element.parentElement?.className || ''}`;
+            return Boolean(
+                element.disabled ||
+                element.getAttribute('disabled') !== null ||
+                element.getAttribute('aria-disabled') === 'true' ||
+                /disabled|inactif|desactive|inactive|bouton-disabled|button-disabled/i.test(disabledText)
+            );
+        }
+        findActionControl(words) {
+            const candidates = [...document.querySelectorAll('button, a, input[type="button"], input[type="submit"], [onclick], [role="button"]')];
+            const loweredWords = words.map((word) => String(word).toLowerCase());
+            const found = candidates.find((element) => {
+                if (!this.isVisible(element) || this.isDisabled(element)) return false;
+                const text = this.getElementText(element).toLowerCase();
+                return loweredWords.some((word) => text.includes(word.toLowerCase()));
+            });
+            if (found) return found;
+
+            const fuzzy = candidates.find((element) => {
+                if (!this.isVisible(element) || this.isDisabled(element)) return false;
+                const text = this.getElementText(element).toLowerCase();
+                return loweredWords.some((word) => word.length >= 4 && text.includes(word.slice(0, 4).toLowerCase()));
+            });
+            return fuzzy || null;
+        }
+        describeControl(element) { return this.horseParser.describeElement(element); }
     }
 
     class LowadiAdapter extends GameAdapter {
@@ -620,49 +511,84 @@
     }
 
     class AdapterFactory {
-        static create(routeManager) {
-            if (window.location.hostname === 'www.lowadi.com') return new LowadiAdapter(routeManager);
-            return new GameAdapter(routeManager);
+        static create(routeManager) { return window.location.hostname === 'www.lowadi.com' ? new LowadiAdapter(routeManager) : new GameAdapter(routeManager); }
+    }
+
+    class BasicCareModule {
+        constructor({ adapter, settingsManager, stateManager, logger, delayManager }) {
+            this.adapter = adapter;
+            this.settingsManager = settingsManager;
+            this.stateManager = stateManager;
+            this.logger = logger;
+            this.delayManager = delayManager;
+        }
+        getEnabledActions() {
+            return CareActions.filter((action) => this.settingsManager.get('care', action.id));
+        }
+        async performCare() {
+            const enabledActions = this.getEnabledActions();
+            if (!enabledActions.length) {
+                this.logger.info('Уход выключен в настройках');
+                return { success: true, done: 0, skipped: 0 };
+            }
+
+            let done = 0;
+            let skipped = 0;
+            for (const action of enabledActions) {
+                const state = this.stateManager.get();
+                if (state.status !== AppStatus.RUNNING) break;
+
+                this.stateManager.patch({ currentOperation: action.operation });
+                const control = this.adapter.findActionControl(action.words);
+                if (!control) {
+                    skipped += 1;
+                    this.logger.warn(`${action.label}: кнопка не найдена или действие недоступно`);
+                    continue;
+                }
+
+                await this.safeClick(control, action.label);
+                done += 1;
+                this.stateManager.incrementCareActions();
+                this.logger.success(`${action.label}: выполнено`);
+                await this.delayManager.random(900, 1900);
+            }
+            return { success: true, done, skipped };
+        }
+        async safeClick(element, label) {
+            if (!element) throw new Error(`Не найден элемент: ${label}`);
+            element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            await this.delayManager.random(250, 650);
+            this.logger.info(`Нажимаю: ${label}`);
+            element.click();
         }
     }
 
     class HerdRunner {
-        constructor({ adapter, stateManager, settingsManager, logger, delayManager }) {
+        constructor({ adapter, stateManager, settingsManager, logger, delayManager, careModule }) {
             this.adapter = adapter;
             this.stateManager = stateManager;
             this.settingsManager = settingsManager;
             this.logger = logger;
             this.delayManager = delayManager;
+            this.careModule = careModule;
             this.timer = null;
             this.isExecuting = false;
         }
-
-        isAutoLimit() {
-            return this.settingsManager.get('run', 'limitMode') === 'auto';
-        }
-
+        isAutoLimit() { return this.settingsManager.get('run', 'limitMode') === 'auto'; }
         async start() {
             const pageInfo = this.adapter.getPageInfo();
             const autoLimit = this.isAutoLimit();
             const max = Number(this.settingsManager.get('run', 'maxHorsesPerRun') || 25);
-
             if (pageInfo.pageType !== PageType.HORSE) {
                 this.logger.warn('Откройте страницу лошади для запуска табунного режима');
                 this.stateManager.patch({ pageType: pageInfo.pageType, currentOperation: 'Нужна страница лошади' });
                 return;
             }
-
             this.stateManager.start(autoLimit ? 0 : max, autoLimit ? 'auto' : 'manual');
             this.logger.success(autoLimit ? 'Табунный режим запущен: Авто до конца завода' : `Табунный режим запущен: лимит ${max}`);
             await this.processCurrentHorseAndGoNext();
         }
-
-        pause() {
-            this.clearTimer();
-            this.stateManager.pause();
-            this.logger.warn('Пауза. Продолжение сохранено.');
-        }
-
+        pause() { this.clearTimer(); this.stateManager.pause(); this.logger.warn('Пауза. Продолжение сохранено.'); }
         async resume() {
             const state = this.stateManager.get();
             if (state.status !== AppStatus.PAUSED) return;
@@ -670,41 +596,26 @@
             this.logger.success('Продолжаю с текущей страницы');
             await this.processCurrentHorseAndGoNext();
         }
-
         stop() {
             this.clearTimer();
-            this.stateManager.stop('Остановлено');
-            this.logger.warn('Табунный режим остановлен');
+            this.stateManager.stop('Остановлено', true);
+            this.logger.warn('Табунный режим остановлен, счётчик обработанных сброшен');
         }
-
-        softStop() {
-            this.stateManager.requestSoftStop();
-            this.logger.warn('Включена мягкая остановка после текущей лошади');
-        }
-
+        softStop() { this.stateManager.requestSoftStop(); this.logger.warn('Включена мягкая остановка после текущей лошади'); }
         scheduleAutoResume() {
             const state = this.stateManager.get();
             if (state.status !== AppStatus.RUNNING || state.mode !== 'hybrid-herd') return;
             this.clearTimer();
             this.timer = window.setTimeout(() => this.processCurrentHorseAndGoNext(), 1200);
         }
-
-        clearTimer() {
-            if (this.timer) {
-                window.clearTimeout(this.timer);
-                this.timer = null;
-            }
-        }
-
+        clearTimer() { if (this.timer) { window.clearTimeout(this.timer); this.timer = null; } }
         async processCurrentHorseAndGoNext() {
             if (this.isExecuting) return;
             this.isExecuting = true;
-
             try {
                 const state = this.stateManager.get();
                 const pageInfo = this.adapter.getPageInfo();
                 if (state.status !== AppStatus.RUNNING) return;
-
                 if (pageInfo.pageType !== PageType.HORSE) {
                     this.logger.warn('Текущая страница не является страницей лошади. Останавливаюсь.');
                     this.stateManager.error('Не страница лошади');
@@ -714,21 +625,28 @@
                 const horse = this.adapter.analyzeHorse();
                 const id = horse.id || window.location.href;
                 const processedIds = state.run.processedIds || [];
-
                 if (processedIds.includes(id)) {
                     if (state.run.limitMode === 'auto') {
                         this.logger.success('Авто-режим завершён: похоже, все лошади в заводе пройдены');
-                        this.stateManager.stop('Завод пройден');
+                        this.stateManager.stop('Завод пройден', false);
                     } else {
                         this.logger.warn('Похоже, табун пошёл по кругу. Работа остановлена.');
-                        this.stateManager.stop('Остановлено: круг табуна');
+                        this.stateManager.stop('Остановлено: круг табуна', false);
                     }
                     return;
                 }
 
-                this.stateManager.patch({ currentOperation: 'Анализ текущей лошади', pageType: pageInfo.pageType });
-                this.stateManager.markHorseProcessed(horse);
-                this.logger.success(`Лошадь отмечена: ${horse.name || id}`);
+                this.stateManager.patch({ currentOperation: 'Анализ текущей лошади', pageType: pageInfo.pageType, currentHorse: horse, currentHorseName: horse.name || '—', currentHorseId: id });
+                this.logger.info(`Текущая лошадь: ${horse.name || id}`);
+
+                await this.careModule.performCare();
+
+                const afterCareState = this.stateManager.get();
+                if (afterCareState.status !== AppStatus.RUNNING) return;
+
+                const freshHorse = this.adapter.analyzeHorse();
+                this.stateManager.markHorseProcessed({ ...freshHorse, id });
+                this.logger.success(`Лошадь обработана: ${freshHorse.name || horse.name || id}`);
 
                 const freshState = this.stateManager.get();
                 const manualLimit = freshState.run.limitMode !== 'auto';
@@ -737,13 +655,12 @@
 
                 if (manualLimit && freshState.progress.current >= max) {
                     this.logger.success(`Достигнут лимит запуска: ${max}`);
-                    this.stateManager.stop('Достигнут лимит');
+                    this.stateManager.stop('Достигнут лимит', false);
                     return;
                 }
-
                 if (stopAfterCurrent) {
                     this.logger.success('Мягкая остановка выполнена после текущей лошади');
-                    this.stateManager.stop('Мягкая остановка');
+                    this.stateManager.stop('Мягкая остановка', false);
                     return;
                 }
 
@@ -753,7 +670,6 @@
                     this.stateManager.error('Нет кнопки следующей лошади');
                     return;
                 }
-
                 this.stateManager.patch({ currentOperation: 'Переход к следующей лошади' });
                 await this.delayManager.random();
                 await this.safeClick(nextButton, 'следующая лошадь');
@@ -765,7 +681,6 @@
                 this.isExecuting = false;
             }
         }
-
         async safeClick(element, label) {
             if (!element) throw new Error(`Не найден элемент: ${label}`);
             element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
@@ -800,7 +715,6 @@
                 { id: 'settings', icon: '⚙', label: 'Настройки' },
             ];
         }
-
         mount() {
             if (document.getElementById(`${APP.id}-root`)) return;
             this.host = document.createElement('div');
@@ -814,78 +728,53 @@
             this.eventBus.on('settings:changed', () => this.render());
             this.eventBus.on('log:changed', () => this.render());
         }
-
-        storageGetAnalysis() {
-            return this.settingsManager.storage.get('latestAnalysis', null);
-        }
-
-        storageSetAnalysis(analysis) {
-            this.latestAnalysis = analysis;
-            this.settingsManager.storage.set('latestAnalysis', analysis);
-        }
-
+        storageGetAnalysis() { return this.settingsManager.storage.get('latestAnalysis', null); }
+        storageSetAnalysis(analysis) { this.latestAnalysis = analysis; this.settingsManager.storage.set('latestAnalysis', analysis); }
         getTheme() {
             const theme = this.settingsManager.get('appearance', 'theme');
             if (theme !== 'auto') return theme;
             return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
-
         getRuntimeText() {
             const state = this.stateManager.get();
             if (!state.startedAt) return '00:00';
-            const end = state.status === AppStatus.RUNNING || state.status === AppStatus.PAUSED
-                ? Date.now()
-                : state.finishedAt || state.lastActionAt || Date.now();
+            const end = state.status === AppStatus.RUNNING || state.status === AppStatus.PAUSED ? Date.now() : state.finishedAt || state.lastActionAt || Date.now();
             return this.formatDuration(Math.max(0, end - state.startedAt));
         }
-
         startRuntimeTimer() {
             if (this.runtimeTimer) window.clearInterval(this.runtimeTimer);
             this.runtimeTimer = window.setInterval(() => this.updateRuntimeNodes(), 1000);
             this.updateRuntimeNodes();
         }
-
         updateRuntimeNodes() {
             if (!this.root) return;
             const text = this.getRuntimeText();
-            this.root.querySelectorAll('[data-runtime]').forEach((node) => {
-                node.textContent = text;
-            });
+            this.root.querySelectorAll('[data-runtime]').forEach((node) => { node.textContent = text; });
         }
-
         getPositionStyle(savedUi) {
             if (savedUi.x === null || savedUi.x === undefined || savedUi.y === null || savedUi.y === undefined) return '';
             const x = Math.max(12, Math.min(window.innerWidth - 180, Number(savedUi.x)));
             const y = Math.max(12, Math.min(window.innerHeight - 120, Number(savedUi.y)));
             return `left: ${x}px; top: ${y}px; right: auto; bottom: auto; height: min(720px, calc(100vh - ${y + 16}px)); max-height: calc(100vh - ${y + 16}px);`;
         }
-
         render() {
             const settings = this.settingsManager.all();
             const compactClass = settings.appearance.compactMode ? 'hm-compact' : '';
             const savedUi = this.settingsManager.storage.get('ui', { x: null, y: null, minimized: false, activePage: 'home' });
-            const positionStyle = this.getPositionStyle(savedUi);
-
             this.root.innerHTML = `
                 <style>${this.styles()}</style>
-                <div class="hm-app hm-theme-${this.getTheme()} ${compactClass} ${savedUi.minimized ? 'hm-minimized' : ''}" style="${positionStyle}">
+                <div class="hm-app hm-theme-${this.getTheme()} ${compactClass} ${savedUi.minimized ? 'hm-minimized' : ''}" style="${this.getPositionStyle(savedUi)}">
                     <div class="hm-shell">
                         <aside class="hm-sidebar">
                             <div class="hm-brand hm-drag-handle" title="Можно перетащить окно">
                                 <div class="hm-brand-icon">🐴</div>
-                                <div>
-                                    <div class="hm-brand-title">Howrse Manager</div>
-                                    <div class="hm-brand-subtitle">v${APP.version}</div>
-                                </div>
+                                <div><div class="hm-brand-title">Howrse Manager</div><div class="hm-brand-subtitle">v${APP.version}</div></div>
                             </div>
                             <nav class="hm-nav">${this.pages.map((page) => this.renderNavItem(page)).join('')}</nav>
                         </aside>
                         <main class="hm-content">
                             <header class="hm-header hm-drag-handle">
-                                <div>
-                                    <div class="hm-kicker">Tampermonkey application</div>
-                                    <h1>${this.getActivePageTitle()}</h1>
-                                </div>
+                                <div><div class="hm-kicker">Tampermonkey application</div><h1>${this.getActivePageTitle()}</h1></div>
                                 <div class="hm-window-actions">
                                     <button class="hm-icon-button" data-action="toggle-theme" title="Сменить тему">${this.getTheme() === 'dark' ? '🌙' : '☀'}</button>
                                     <button class="hm-icon-button" data-action="toggle-minimize" title="Свернуть">${savedUi.minimized ? '□' : '—'}</button>
@@ -894,35 +783,16 @@
                             <section class="hm-page">${this.renderPage()}</section>
                         </main>
                     </div>
-                </div>
-            `;
+                </div>`;
             this.bindDynamicEvents();
             this.updateRuntimeNodes();
         }
-
-        renderNavItem(page) {
-            return `<button class="hm-nav-item ${this.activePage === page.id ? 'hm-active' : ''}" data-page="${page.id}"><span>${page.icon}</span><span>${page.label}</span></button>`;
-        }
-
-        getActivePageTitle() {
-            const page = this.pages.find((item) => item.id === this.activePage);
-            return page ? `${page.icon} ${page.label}` : APP.name;
-        }
-
+        renderNavItem(page) { return `<button class="hm-nav-item ${this.activePage === page.id ? 'hm-active' : ''}" data-page="${page.id}"><span>${page.icon}</span><span>${page.label}</span></button>`; }
+        getActivePageTitle() { const page = this.pages.find((item) => item.id === this.activePage); return page ? `${page.icon} ${page.label}` : APP.name; }
         renderPage() {
-            const renderers = {
-                home: () => this.renderHomePage(),
-                run: () => this.renderRunPage(),
-                activity: () => this.renderActivityPage(),
-                ec: () => this.renderEcPage(),
-                blacklist: () => this.renderBlacklistPage(),
-                stats: () => this.renderStatsPage(),
-                developer: () => this.renderDeveloperPage(),
-                settings: () => this.renderSettingsPage(),
-            };
+            const renderers = { home: () => this.renderHomePage(), run: () => this.renderRunPage(), activity: () => this.renderActivityPage(), ec: () => this.renderEcPage(), blacklist: () => this.renderBlacklistPage(), stats: () => this.renderStatsPage(), developer: () => this.renderDeveloperPage(), settings: () => this.renderSettingsPage() };
             return (renderers[this.activePage] || renderers.home)();
         }
-
         renderHomePage() {
             const state = this.stateManager.get();
             const horse = state.currentHorse;
@@ -930,50 +800,38 @@
                 <div class="hm-grid hm-grid-2">
                     <div class="hm-card">
                         <div class="hm-card-title">Состояние</div>
-                        <div class="hm-status-row">
-                            <span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span>
-                            <span class="hm-muted">Время: <span data-runtime>${this.getRuntimeText()}</span></span>
-                        </div>
+                        <div class="hm-status-row"><span class="hm-status hm-status-${state.status}">${this.statusLabel(state.status)}</span><span class="hm-muted">Время: <span data-runtime>${this.getRuntimeText()}</span></span></div>
                         <div class="hm-info-list">
                             <div><span>Текущая лошадь</span><strong>${this.escapeHtml(state.currentHorseName || '—')}</strong></div>
                             <div><span>Операция</span><strong>${this.escapeHtml(state.currentOperation || '—')}</strong></div>
                             <div><span>Прогресс</span><strong>${state.progress.current} / ${this.formatTotal(state)}</strong></div>
+                            <div><span>Действий ухода</span><strong>${state.stats.careActions || 0}</strong></div>
                         </div>
-                        <div class="hm-actions">
-                            <button class="hm-button hm-primary" data-action="start">Старт</button>
-                            <button class="hm-button" data-action="pause">Пауза</button>
-                            <button class="hm-button" data-action="resume">Продолжить</button>
-                            <button class="hm-button hm-danger" data-action="stop">Стоп</button>
-                        </div>
-                        <div class="hm-actions hm-actions-left">
-                            <button class="hm-small-button" data-action="soft-stop">Остановить после текущей</button>
-                            <button class="hm-small-button" data-action="analyze">Анализ</button>
-                        </div>
+                        ${this.renderMainButtons()}
                     </div>
                     <div class="hm-card hm-card-accent">
-                        <div class="hm-card-title">v0.3.1: правки интерфейса</div>
-                        <p>Добавлены прокрутка внутри окна, режим лимита «Авто», запоминание открытого раздела и живое время работы.</p>
-                        <p class="hm-muted">Уход и тренировки появятся следующими этапами.</p>
+                        <div class="hm-card-title">v0.4: базовый уход</div>
+                        <p>Теперь перед переходом к следующей лошади скрипт выполняет выбранные действия ухода: чистка, урок/миссия, ласка, вода, корм и сон.</p>
+                        <p class="hm-muted">Если действие недоступно или кнопка не найдена, оно пропускается и записывается в лог.</p>
                         ${horse ? this.renderHorseMini(horse) : ''}
                     </div>
                 </div>
-                ${this.renderLogPanel()}
-            `;
+                ${this.renderLogPanel()}`;
         }
-
-        renderHorseMini(horse) {
-            return `<div class="hm-mini-horse"><div><span>Энергия</span><strong>${this.valueOrDash(horse.energy, '%')}</strong></div><div><span>Здоровье</span><strong>${this.valueOrDash(horse.health, '%')}</strong></div><div><span>Настроение</span><strong>${this.valueOrDash(horse.mood, '%')}</strong></div></div>`;
+        renderMainButtons() {
+            return `<div class="hm-actions"><button class="hm-button hm-primary" data-action="start">Старт</button><button class="hm-button" data-action="pause">Пауза</button><button class="hm-button" data-action="resume">Продолжить</button><button class="hm-button hm-danger" data-action="stop">Стоп</button></div><div class="hm-actions hm-actions-left"><button class="hm-small-button" data-action="soft-stop">Остановить после текущей</button><button class="hm-small-button" data-action="analyze">Анализ</button></div>`;
         }
-
+        renderHorseMini(horse) { return `<div class="hm-mini-horse"><div><span>Энергия</span><strong>${this.valueOrDash(horse.energy, '%')}</strong></div><div><span>Здоровье</span><strong>${this.valueOrDash(horse.health, '%')}</strong></div><div><span>Настроение</span><strong>${this.valueOrDash(horse.mood, '%')}</strong></div></div>`; }
         renderRunPage() {
             const state = this.stateManager.get();
             return `
                 <div class="hm-grid hm-grid-2">
                     <div class="hm-card">
                         <div class="hm-card-title">Гибридный прогон табуна</div>
-                        <p>Текущая версия делает безопасный маршрут: текущая лошадь → анализ → следующая лошадь.</p>
-                        <div class="hm-note">Режим «Авто» останавливается, когда скрипт снова встречает уже обработанную лошадь — это признак, что завод пройден по кругу.</div>
+                        <p>Маршрут v0.4: текущая лошадь → базовый уход → отметка обработки → следующая лошадь.</p>
+                        <div class="hm-note">Для первого теста лучше поставить ручной лимит 1–3 лошади и посмотреть лог.</div>
                         ${this.renderSettingsSection('run')}
+                        ${this.renderSettingsSection('care')}
                         ${this.renderSettingsSection('delays')}
                     </div>
                     <div class="hm-card">
@@ -983,45 +841,22 @@
                             <div><span>Время</span><strong data-runtime>${this.getRuntimeText()}</strong></div>
                             <div><span>Обработано</span><strong>${state.progress.current}</strong></div>
                             <div><span>Лимит</span><strong>${this.formatTotal(state)}</strong></div>
+                            <div><span>Действий ухода</span><strong>${state.stats.careActions || 0}</strong></div>
                             <div><span>Мягкая остановка</span><strong>${state.run.softStopRequested ? 'да' : 'нет'}</strong></div>
                         </div>
-                        <div class="hm-actions">
-                            <button class="hm-button hm-primary" data-action="start">Старт</button>
-                            <button class="hm-button" data-action="pause">Пауза</button>
-                            <button class="hm-button" data-action="resume">Продолжить</button>
-                            <button class="hm-button hm-danger" data-action="stop">Стоп</button>
-                        </div>
+                        ${this.renderMainButtons()}
                     </div>
-                </div>
-            `;
+                </div>`;
         }
-
-        renderActivityPage() {
-            return `<div class="hm-card"><div class="hm-card-title">Активность</div><p>Здесь позже появятся тренировки, прогулки, соревнования и умный режим выбора действия.</p><div class="hm-empty">Следующий большой этап после маршрута табуна — базовый уход и активность на остаток энергии.</div></div>`;
-        }
-
-        renderEcPage() {
-            return `<div class="hm-card"><div class="hm-card-title">КСК</div><p>Здесь позже будет автоматическая запись в конноспортивный центр с умным поиском.</p><div class="hm-empty">Модуль будет добавлен после базового ухода.</div></div>`;
-        }
-
-        renderBlacklistPage() {
-            return `<div class="hm-card"><div class="hm-card-title">Чёрный список</div><p>Здесь будут правила пропуска: жеребята, беременные, VIP, лошади в продаже и другие исключения.</p><div class="hm-empty">Правила появятся вместе с полноценным табунным режимом.</div></div>`;
-        }
-
+        renderActivityPage() { return `<div class="hm-card"><div class="hm-card-title">Активность</div><p>Здесь позже появятся тренировки, прогулки, соревнования и умный режим выбора действия.</p><div class="hm-empty">Следующий большой этап — активность на остаток энергии.</div></div>`; }
+        renderEcPage() { return `<div class="hm-card"><div class="hm-card-title">КСК</div><p>Здесь позже будет автоматическая запись в конноспортивный центр с умным поиском.</p><div class="hm-empty">Модуль будет добавлен после базового ухода.</div></div>`; }
+        renderBlacklistPage() { return `<div class="hm-card"><div class="hm-card-title">Чёрный список</div><p>Здесь будут правила пропуска: жеребята, беременные, VIP, лошади в продаже и другие исключения.</p><div class="hm-empty">Правила появятся вместе с полноценным табунным режимом.</div></div>`; }
         renderStatsPage() {
             const state = this.stateManager.get();
             const logItems = this.logger.all();
-            const errors = logItems.filter((item) => item.level === 'error').length;
-            return `
-                <div class="hm-grid hm-grid-3">
-                    <div class="hm-stat"><span>Обработано</span><strong>${state.progress.current}</strong></div>
-                    <div class="hm-stat"><span>Переходов</span><strong>${Math.max(0, state.progress.current - 1)}</strong></div>
-                    <div class="hm-stat"><span>Ошибок</span><strong>${errors}</strong></div>
-                </div>
-                <div class="hm-card"><div class="hm-card-title">Статистика</div><p>В v0.3.1 статистика считает обработанных лошадей в гибридном режиме. После подключения ухода здесь появятся чистки, уроки, тренировки, КСК и сон.</p></div>
-            `;
+            const errors = logItems.filter((item) => item.level === 'error').length + (state.stats.errors || 0);
+            return `<div class="hm-grid hm-grid-3"><div class="hm-stat"><span>Обработано</span><strong>${state.progress.current}</strong></div><div class="hm-stat"><span>Действий ухода</span><strong>${state.stats.careActions || 0}</strong></div><div class="hm-stat"><span>Ошибок</span><strong>${errors}</strong></div></div><div class="hm-card"><div class="hm-card-title">Статистика</div><p>В v0.4 статистика считает обработанных лошадей и выполненные действия ухода.</p></div>`;
         }
-
         renderDeveloperPage() {
             const pageInfo = this.adapter.getPageInfo();
             const developerEnabled = this.settingsManager.get('developer', 'enabled');
@@ -1031,54 +866,28 @@
                     <div class="hm-card">
                         <div class="hm-card-title">Диагностика страницы</div>
                         ${this.renderSettingsSection('developer')}
-                        ${developerEnabled ? `
-                            <div class="hm-dev-grid">
-                                <div><span>URL</span><strong>${this.escapeHtml(this.shorten(pageInfo.url, 95))}</strong></div>
-                                <div><span>Домен</span><strong>${this.escapeHtml(pageInfo.hostname)}</strong></div>
-                                <div><span>Тип страницы</span><strong>${this.escapeHtml(pageInfo.pageTypeLabel)}</strong></div>
-                                <div><span>Адаптер</span><strong>${this.escapeHtml(pageInfo.adapter)}</strong></div>
-                                <div><span>Страница лошади</span><strong>${pageInfo.pageType === PageType.HORSE ? 'да' : 'нет'}</strong></div>
-                                <div><span>Список лошадей</span><strong>${pageInfo.pageType === PageType.HORSE_LIST ? 'да' : 'нет'}</strong></div>
-                            </div>
-                            <div class="hm-actions hm-actions-left"><button class="hm-button hm-primary" data-action="analyze">Обновить анализ</button></div>
-                        ` : '<div class="hm-empty">Режим разработчика выключен.</div>'}
+                        ${developerEnabled ? `<div class="hm-dev-grid"><div><span>URL</span><strong>${this.escapeHtml(this.shorten(pageInfo.url, 95))}</strong></div><div><span>Домен</span><strong>${this.escapeHtml(pageInfo.hostname)}</strong></div><div><span>Тип страницы</span><strong>${this.escapeHtml(pageInfo.pageTypeLabel)}</strong></div><div><span>Адаптер</span><strong>${this.escapeHtml(pageInfo.adapter)}</strong></div><div><span>Страница лошади</span><strong>${pageInfo.pageType === PageType.HORSE ? 'да' : 'нет'}</strong></div><div><span>Список лошадей</span><strong>${pageInfo.pageType === PageType.HORSE_LIST ? 'да' : 'нет'}</strong></div></div><div class="hm-actions hm-actions-left"><button class="hm-button hm-primary" data-action="analyze">Обновить анализ</button></div>` : '<div class="hm-empty">Режим разработчика выключен.</div>'}
                     </div>
-                    <div class="hm-card">
-                        <div class="hm-card-title">Найденные данные</div>
-                        ${this.renderAnalysis(analysis)}
-                    </div>
-                </div>
-            `;
+                    <div class="hm-card"><div class="hm-card-title">Найденные данные</div>${this.renderAnalysis(analysis)}${this.renderCareDiagnostics()}</div>
+                </div>`;
         }
-
+        renderCareDiagnostics() {
+            const rows = CareActions.map((action) => {
+                const control = this.adapter.findActionControl(action.words);
+                return `<div><span>${action.label}</span><strong>${control ? 'найдена' : 'не найдена'}</strong></div>`;
+            }).join('');
+            return `<div class="hm-card-title hm-subtitle">Кнопки ухода</div><div class="hm-info-list">${rows}</div>`;
+        }
         renderAnalysis(analysis) {
             if (!analysis) return '<div class="hm-empty">Пока нет анализа.</div>';
-            return `
-                <div class="hm-info-list">
-                    <div><span>ID</span><strong>${this.escapeHtml(analysis.id || '—')}</strong></div>
-                    <div><span>Имя</span><strong>${this.escapeHtml(analysis.name || '—')}</strong></div>
-                    <div><span>Энергия</span><strong>${this.valueOrDash(analysis.energy, '%')}</strong></div>
-                    <div><span>Здоровье</span><strong>${this.valueOrDash(analysis.health, '%')}</strong></div>
-                    <div><span>Настроение</span><strong>${this.valueOrDash(analysis.mood, '%')}</strong></div>
-                    <div><span>Возраст</span><strong>${this.escapeHtml(analysis.age || '—')}</strong></div>
-                    <div><span>Пол</span><strong>${this.escapeHtml(analysis.sex || '—')}</strong></div>
-                    <div><span>Кнопка следующей лошади</span><strong>${analysis.hasNextHorseButton ? 'найдена' : 'не найдена'}</strong></div>
-                    <div><span>Селектор кнопки</span><strong>${this.escapeHtml(analysis.nextHorseButtonSelector || '—')}</strong></div>
-                </div>
-                <details class="hm-details"><summary>Сырой текст страницы</summary><pre>${this.escapeHtml(analysis.pageTextSample || '')}</pre></details>
-            `;
+            return `<div class="hm-info-list"><div><span>ID</span><strong>${this.escapeHtml(analysis.id || '—')}</strong></div><div><span>Имя</span><strong>${this.escapeHtml(analysis.name || '—')}</strong></div><div><span>Энергия</span><strong>${this.valueOrDash(analysis.energy, '%')}</strong></div><div><span>Здоровье</span><strong>${this.valueOrDash(analysis.health, '%')}</strong></div><div><span>Настроение</span><strong>${this.valueOrDash(analysis.mood, '%')}</strong></div><div><span>Возраст</span><strong>${this.escapeHtml(analysis.age || '—')}</strong></div><div><span>Пол</span><strong>${this.escapeHtml(analysis.sex || '—')}</strong></div><div><span>Кнопка следующей лошади</span><strong>${analysis.hasNextHorseButton ? 'найдена' : 'не найдена'}</strong></div><div><span>Селектор кнопки</span><strong>${this.escapeHtml(analysis.nextHorseButtonSelector || '—')}</strong></div></div><details class="hm-details"><summary>Сырой текст страницы</summary><pre>${this.escapeHtml(analysis.pageTextSample || '')}</pre></details>`;
         }
-
-        renderSettingsPage() {
-            return `<div class="hm-card"><div class="hm-card-title">Настройки</div>${this.renderSettingsSection('appearance')}${this.renderSettingsSection('delays')}<div class="hm-actions hm-actions-left"><button class="hm-button hm-danger" data-action="reset-settings">Сбросить настройки</button><button class="hm-button" data-action="clear-log">Очистить лог</button></div></div>`;
-        }
-
+        renderSettingsPage() { return `<div class="hm-card"><div class="hm-card-title">Настройки</div>${this.renderSettingsSection('appearance')}${this.renderSettingsSection('delays')}<div class="hm-actions hm-actions-left"><button class="hm-button hm-danger" data-action="reset-settings">Сбросить настройки</button><button class="hm-button" data-action="clear-log">Очистить лог</button></div></div>`; }
         renderSettingsSection(sectionId) {
             const section = settingsSchema.find((item) => item.id === sectionId);
             if (!section) return '';
             return `<div class="hm-settings-section"><div class="hm-section-title">${section.title}</div><p class="hm-muted">${section.description}</p>${section.fields.map((field) => this.renderField(section.id, field)).join('')}</div>`;
         }
-
         renderField(sectionId, field) {
             const value = this.settingsManager.get(sectionId, field.id);
             const fieldId = `hm-field-${sectionId}-${field.id}`;
@@ -1087,18 +896,13 @@
             if (field.type === 'number') return `<label class="hm-field" for="${fieldId}"><span>${field.label}</span><input id="${fieldId}" type="number" value="${value}" min="${field.min}" max="${field.max}" step="${field.step || 1}" data-setting-section="${sectionId}" data-setting-field="${field.id}"></label>`;
             return '';
         }
-
         renderLogPanel() {
-            const items = this.logger.all().slice(0, 14);
+            const items = this.logger.all().slice(0, 16);
             return `<div class="hm-card hm-log-card"><div class="hm-card-header"><div class="hm-card-title">Лог</div><button class="hm-small-button" data-action="clear-log">Очистить</button></div><div class="hm-log-list">${items.length ? items.map((item) => `<div class="hm-log-item hm-log-${item.level}"><span>${item.time}</span><strong>${this.escapeHtml(item.message)}</strong></div>`).join('') : '<div class="hm-empty">Лог пока пуст.</div>'}</div></div>`;
         }
-
         bindEvents() {
-            window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-                if (this.settingsManager.get('appearance', 'theme') === 'auto') this.render();
-            });
+            window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (this.settingsManager.get('appearance', 'theme') === 'auto') this.render(); });
         }
-
         bindDynamicEvents() {
             this.root.querySelectorAll('[data-page]').forEach((button) => {
                 button.addEventListener('click', () => {
@@ -1108,11 +912,7 @@
                     this.render();
                 });
             });
-
-            this.root.querySelectorAll('[data-action]').forEach((button) => {
-                button.addEventListener('click', () => this.handleAction(button.dataset.action));
-            });
-
+            this.root.querySelectorAll('[data-action]').forEach((button) => { button.addEventListener('click', () => this.handleAction(button.dataset.action)); });
             this.root.querySelectorAll('[data-setting-section]').forEach((input) => {
                 input.addEventListener('change', () => {
                     const sectionId = input.dataset.settingSection;
@@ -1122,15 +922,12 @@
                     this.logger.info(`Настройка сохранена: ${fieldId}`);
                 });
             });
-
             this.bindDragEvents();
         }
-
         bindDragEvents() {
             const app = this.root.querySelector('.hm-app');
             const handles = this.root.querySelectorAll('.hm-drag-handle');
             if (!app || !handles.length) return;
-
             handles.forEach((handle) => {
                 handle.addEventListener('mousedown', (event) => {
                     if (event.target.closest('button')) return;
@@ -1139,19 +936,13 @@
                     event.preventDefault();
                 });
             });
-
             const onMouseMove = (event) => {
                 if (!this.drag) return;
                 const x = Math.max(12, Math.min(window.innerWidth - 120, event.clientX - this.drag.offsetX));
                 const y = Math.max(12, Math.min(window.innerHeight - 120, event.clientY - this.drag.offsetY));
-                app.style.left = `${x}px`;
-                app.style.top = `${y}px`;
-                app.style.right = 'auto';
-                app.style.bottom = 'auto';
-                app.style.height = `min(720px, calc(100vh - ${y + 16}px))`;
-                app.style.maxHeight = `calc(100vh - ${y + 16}px)`;
+                app.style.left = `${x}px`; app.style.top = `${y}px`; app.style.right = 'auto'; app.style.bottom = 'auto';
+                app.style.height = `min(720px, calc(100vh - ${y + 16}px))`; app.style.maxHeight = `calc(100vh - ${y + 16}px)`;
             };
-
             const onMouseUp = () => {
                 if (!this.drag) return;
                 const rect = app.getBoundingClientRect();
@@ -1159,15 +950,12 @@
                 this.settingsManager.storage.set('ui', { ...ui, x: Math.round(rect.left), y: Math.round(rect.top), activePage: this.activePage });
                 this.drag = null;
             };
-
             document.removeEventListener('mousemove', this._onMouseMove);
             document.removeEventListener('mouseup', this._onMouseUp);
-            this._onMouseMove = onMouseMove;
-            this._onMouseUp = onMouseUp;
+            this._onMouseMove = onMouseMove; this._onMouseUp = onMouseUp;
             document.addEventListener('mousemove', this._onMouseMove);
             document.addEventListener('mouseup', this._onMouseUp);
         }
-
         async handleAction(action) {
             const ui = this.settingsManager.storage.get('ui', { minimized: false });
             if (action === 'start') return this.runner.start();
@@ -1175,7 +963,6 @@
             if (action === 'resume') return this.runner.resume();
             if (action === 'stop') return this.runner.stop();
             if (action === 'soft-stop') return this.runner.softStop();
-
             if (action === 'analyze') {
                 const analysis = this.adapter.analyzeHorse();
                 this.storageSetAnalysis(analysis);
@@ -1186,19 +973,8 @@
                 this.render();
                 return;
             }
-
-            if (action === 'clear-log') {
-                this.logger.clear();
-                this.logger.info('Лог очищен');
-                return;
-            }
-
-            if (action === 'reset-settings') {
-                this.settingsManager.reset();
-                this.logger.warn('Настройки сброшены');
-                return;
-            }
-
+            if (action === 'clear-log') { this.logger.clear(); this.logger.info('Лог очищен'); return; }
+            if (action === 'reset-settings') { this.settingsManager.reset(); this.logger.warn('Настройки сброшены'); return; }
             if (action === 'toggle-theme') {
                 const current = this.settingsManager.get('appearance', 'theme');
                 const next = current === 'dark' ? 'light' : 'dark';
@@ -1206,28 +982,12 @@
                 this.logger.info(`Тема изменена: ${next === 'dark' ? 'тёмная' : 'светлая'}`);
                 return;
             }
-
-            if (action === 'toggle-minimize') {
-                this.settingsManager.storage.set('ui', { ...ui, minimized: !ui.minimized, activePage: this.activePage });
-                this.render();
-            }
+            if (action === 'toggle-minimize') { this.settingsManager.storage.set('ui', { ...ui, minimized: !ui.minimized, activePage: this.activePage }); this.render(); }
         }
-
         statusLabel(status) {
-            const labels = {
-                [AppStatus.IDLE]: 'Ожидание',
-                [AppStatus.RUNNING]: 'Работает',
-                [AppStatus.PAUSED]: 'Пауза',
-                [AppStatus.STOPPED]: 'Остановлено',
-                [AppStatus.ERROR]: 'Ошибка',
-            };
-            return labels[status] || status;
+            return ({ [AppStatus.IDLE]: 'Ожидание', [AppStatus.RUNNING]: 'Работает', [AppStatus.PAUSED]: 'Пауза', [AppStatus.STOPPED]: 'Остановлено', [AppStatus.ERROR]: 'Ошибка' })[status] || status;
         }
-
-        formatTotal(state) {
-            return state.run?.limitMode === 'auto' ? 'Авто' : (state.progress.total || this.settingsManager.get('run', 'maxHorsesPerRun'));
-        }
-
+        formatTotal(state) { return state.run?.limitMode === 'auto' ? 'Авто' : (state.progress.total || this.settingsManager.get('run', 'maxHorsesPerRun')); }
         formatDuration(ms) {
             const totalSeconds = Math.floor(ms / 1000);
             const hours = Math.floor(totalSeconds / 3600);
@@ -1235,25 +995,9 @@
             const seconds = (totalSeconds % 60).toString().padStart(2, '0');
             return hours > 0 ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`;
         }
-
-        valueOrDash(value, suffix = '') {
-            return value === null || value === undefined || value === '' ? '—' : `${value}${suffix}`;
-        }
-
-        shorten(value, length) {
-            const text = String(value || '');
-            return text.length > length ? `${text.slice(0, length)}…` : text;
-        }
-
-        escapeHtml(value) {
-            return String(value)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
-        }
-
+        valueOrDash(value, suffix = '') { return value === null || value === undefined || value === '' ? '—' : `${value}${suffix}`; }
+        shorten(value, length) { const text = String(value || ''); return text.length > length ? `${text.slice(0, length)}…` : text; }
+        escapeHtml(value) { return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
         styles() {
             return `
                 :host { all: initial; color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -1287,6 +1031,7 @@
                 .hm-card, .hm-stat { padding: 16px; border: 1px solid var(--hm-border); border-radius: 20px; background: var(--hm-panel); }
                 .hm-card-accent { background: linear-gradient(135deg, var(--hm-primary-soft), var(--hm-panel)); }
                 .hm-card-title, .hm-section-title { margin-bottom: 10px; font-weight: 800; letter-spacing: -0.02em; }
+                .hm-subtitle { margin-top: 16px; }
                 .hm-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
                 .hm-status-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
                 .hm-status { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; background: var(--hm-primary-soft); font-weight: 700; }
@@ -1313,7 +1058,7 @@
                 .hm-field-checkbox { display: flex; justify-content: flex-start; }
                 .hm-field input, .hm-field select { width: 100%; padding: 8px 10px; border: 1px solid var(--hm-border); border-radius: 12px; background: var(--hm-panel-soft); color: var(--hm-text); font: inherit; }
                 .hm-field-checkbox input { width: auto; accent-color: var(--hm-primary); }
-                .hm-log-list { display: grid; gap: 7px; max-height: 210px; overflow: auto; }
+                .hm-log-list { display: grid; gap: 7px; max-height: 230px; overflow: auto; }
                 .hm-log-item { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--hm-panel-soft); }
                 .hm-log-item span { color: var(--hm-muted); font-size: 12px; }
                 .hm-log-item strong { overflow-wrap: anywhere; }
@@ -1338,33 +1083,15 @@
             this.delayManager = new DelayManager(this.settingsManager);
             this.routeManager = new RouteManager();
             this.adapter = AdapterFactory.create(this.routeManager);
-            this.runner = new HerdRunner({
-                adapter: this.adapter,
-                stateManager: this.stateManager,
-                settingsManager: this.settingsManager,
-                logger: this.logger,
-                delayManager: this.delayManager,
-            });
-            this.ui = new UIManager({
-                eventBus: this.eventBus,
-                logger: this.logger,
-                settingsManager: this.settingsManager,
-                stateManager: this.stateManager,
-                adapter: this.adapter,
-                runner: this.runner,
-            });
+            this.careModule = new BasicCareModule({ adapter: this.adapter, settingsManager: this.settingsManager, stateManager: this.stateManager, logger: this.logger, delayManager: this.delayManager });
+            this.runner = new HerdRunner({ adapter: this.adapter, stateManager: this.stateManager, settingsManager: this.settingsManager, logger: this.logger, delayManager: this.delayManager, careModule: this.careModule });
+            this.ui = new UIManager({ eventBus: this.eventBus, logger: this.logger, settingsManager: this.settingsManager, stateManager: this.stateManager, adapter: this.adapter, runner: this.runner });
         }
-
         start() {
             const pageInfo = this.adapter.getPageInfo();
             const analysis = pageInfo.pageType === PageType.HORSE ? this.adapter.analyzeHorse() : null;
             const currentState = this.stateManager.get();
-            this.stateManager.patch({
-                pageType: pageInfo.pageType,
-                currentHorse: analysis,
-                currentHorseName: analysis?.name || currentState.currentHorseName || '—',
-                currentHorseId: analysis?.id || currentState.currentHorseId || null,
-            });
+            this.stateManager.patch({ pageType: pageInfo.pageType, currentHorse: analysis, currentHorseName: analysis?.name || currentState.currentHorseName || '—', currentHorseId: analysis?.id || currentState.currentHorseId || null });
             this.storage.set('latestAnalysis', analysis);
             this.ui.mount();
             this.logger.info('Howrse Manager загружен');
@@ -1379,9 +1106,6 @@
         window.HowrseManager = app;
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
-    } else {
-        bootstrap();
-    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
+    else bootstrap();
 }());
