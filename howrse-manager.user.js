@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.1.0
+// @version      0.1.2
 // @description  Умный менеджер-ассистент для Ловади / Howrse. v0.1 MVP «Глаза»: анализ лошади и красивый интерфейс (без действий).
 // @author       less-exe
 // @match        https://www.lowadi.com/*
@@ -13,7 +13,24 @@
     'use strict';
 
     /* ===== КОНСТАНТЫ ===== */
-    const APP = { id: 'howrse-manager', name: 'Howrse Manager', version: '0.1.0', storagePrefix: 'hm:v1' };
+        const APP = {
+        id: 'howrse-manager',
+        name: 'Howrse Manager',
+        version: '0.2.0',
+        storagePrefix: 'hm:',
+        // Заглушка подписки. Позже подключим реальную проверку.
+        subscription: {
+            active: true,
+            plan: 'Демо-версия',
+            expires: '2099-01-01', // формат ГГГГ-ММ-ДД
+        },
+        // Режимы скорости — читаются «мозгом» HumanizedDelay
+        speedModes: {
+            normal:  { label: '⚡ Обычный',   base: 1200, spread: 800,  thinkChance: 0.15, thinkTime: [1500, 4000],  desc: 'Быстро. Подходит для небольших табунов.' },
+            safe:    { label: '🛡️ Безопасный', base: 3000, spread: 2500, thinkChance: 0.35, thinkTime: [3000, 9000],  desc: 'Медленнее, но максимально похоже на живого игрока. Рекомендуется.' },
+            night:   { label: '🌙 Ночной',     base: 6000, spread: 5000, thinkChance: 0.5,  thinkTime: [5000, 20000], desc: 'Очень медленно, с большими паузами. Для работы в фоне.' },
+        },
+    };
 
     const PageType = Object.freeze({ HORSE: 'horse', HORSE_LIST: 'horse_list', EC: 'ec', COMPETITIONS: 'competitions', UNKNOWN: 'unknown' });
     const AppStatus = Object.freeze({ IDLE: 'idle', RUNNING: 'running', PAUSED: 'paused', STOPPED: 'stopped', DONE: 'done', ERROR: 'error' });
@@ -23,19 +40,43 @@
     };
 
     const MENU = [
-        { id: 'home',      icon: '🏠', label: 'Главная',    ready: true },
-        { id: 'run',       icon: '🐴', label: 'Прогон',     ready: true },
-        { id: 'ec',        icon: '🏡', label: 'КСК',        ready: false },
-        { id: 'breeding',  icon: '💕', label: 'Разведение', ready: false },
-        { id: 'training',  icon: '🐎', label: 'Тренировки', ready: false },
-        { id: 'profiles',  icon: '🗂', label: 'Профили',    ready: false },
-        { id: 'stats',     icon: '📊', label: 'Статистика', ready: true },
-        { id: 'settings',  icon: '⚙️', label: 'Настройки',  ready: true },
-        { id: 'about',     icon: 'ℹ️', label: 'О проекте',  ready: true },
-        { id: 'developer', icon: '🧑‍💻', label: 'Разработчик', ready: true },
+        { id: 'home',      icon: '🏠', label: 'Главная',      ready: true },
+        { id: 'run',       icon: '🐴', label: 'Прогон',        ready: true },
+        { id: 'ksk',       icon: '🏡', label: 'КСК',           ready: false },
+        { id: 'breeding',  icon: '💕', label: 'Разведение',    ready: false },
+        { id: 'training',  icon: '🏇', label: 'Тренировки',    ready: false },
+        { id: 'profiles',  icon: '📁', label: 'Профили',       ready: false },
+        { id: 'stats',     icon: '📊', label: 'Статистика',    ready: true },
+        { id: 'settings',  icon: '⚙️', label: 'Настройки',     ready: true },
+        { id: 'about',     icon: 'ℹ️', label: 'О проекте',     ready: true },
+        { id: 'developer', icon: '🧑‍💻', label: 'Разработчик',  ready: true, dev: true },
     ];
 
     const settingsSchema = [
+                {
+            id: 'speed',
+            title: '⏱️ Скорость и безопасность',
+            description: 'Как быстро приложение работает. Чем медленнее — тем безопаснее для аккаунта.',
+            fields: [
+                {
+                    id: 'mode', label: 'Режим скорости', type: 'select',
+                    options: [
+                        { value: 'normal', label: APP.speedModes.normal.label },
+                        { value: 'safe',   label: APP.speedModes.safe.label },
+                        { value: 'night',  label: APP.speedModes.night.label },
+                    ],
+                    default: 'safe',
+                },
+            ],
+        },
+        {
+            id: 'advanced',
+            title: '🧑‍💻 Для продвинутых',
+            description: 'Дополнительные возможности. Обычным игрокам не нужны.',
+            fields: [
+                { id: 'devMode', label: 'Показать раздел «Разработчик»', type: 'checkbox', default: false },
+            ],
+        },
         { id: 'appearance', title: 'Внешний вид', description: 'Тема и поведение окна.', fields: [
             { id: 'theme', type: 'select', label: 'Тема', default: 'dark', options: [
                 { value: 'dark', label: 'Тёмная' }, { value: 'light', label: 'Светлая' }, { value: 'auto', label: 'Авто' } ] },
@@ -123,9 +164,59 @@
     }
 
     /* ===== ЗАДЕРЖКИ ===== */
-    class DelayManager {
-        wait(ms) { return new Promise((r) => window.setTimeout(r, ms)); }
-        random(min = 1200, max = 2400) { return this.wait(Math.floor(Math.random() * (max - min + 1)) + min); }
+        /* ===== «МОЗГ» СКОРОСТИ — имитация живого игрока ===== */
+    class HumanizedDelay {
+        constructor(settings) {
+            this.settings = settings;      // читает выбранный режим
+            this._cancelled = false;
+        }
+        reset() { this._cancelled = false; }
+        cancel() { this._cancelled = true; }
+
+        // Текущий режим из настроек (по умолчанию — безопасный)
+        currentMode() {
+            const key = this.settings?.get('speed', 'mode') || 'safe';
+            return APP.speedModes[key] || APP.speedModes.safe;
+        }
+
+        rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+        //基本 пауза между действиями (с «человеческим» разбросом)
+        nextDelay() {
+            const m = this.currentMode();
+            const jitter = this.rand(-m.spread * 0.4, m.spread);
+            return Math.max(300, m.base + jitter);
+        }
+
+        // Иногда «человек задумывается» — редкая длинная пауза
+        maybeThink() {
+            const m = this.currentMode();
+            if (Math.random() < m.thinkChance) {
+                return this.rand(m.thinkTime[0], m.thinkTime[1]);
+            }
+            return 0;
+        }
+
+        // Ждём с учётом паузы + возможного «раздумья». Можно прервать через cancel()
+        async wait(extraLabel = null) {
+            const base = this.nextDelay();
+            const think = this.maybeThink();
+            const total = base + think;
+            await this._sleep(total);
+            return { base, think, total, thought: think > 0, label: extraLabel };
+        }
+
+        _sleep(ms) {
+            return new Promise((resolve, reject) => {
+                const start = Date.now();
+                const tick = () => {
+                    if (this._cancelled) return reject(new Error('cancelled'));
+                    if (Date.now() - start >= ms) return resolve();
+                    setTimeout(tick, Math.min(120, ms));
+                };
+                tick();
+            });
+        }
     }
 
     /* ===== ТИП СТРАНИЦЫ ===== */
@@ -933,7 +1024,7 @@
             this.logger = new Logger(this.eventBus, this.storage);
             this.settings = new SettingsManager(this.eventBus, this.storage, settingsSchema);
             this.state = new StateManager(this.eventBus, this.storage);
-            this.delay = new DelayManager();
+            this.delay = new HumanizedDelay(this.settings);
             this.route = new RouteManager();
             this.adapter = AdapterFactory.create(this.route);
             this.engine = new RunEngine({
