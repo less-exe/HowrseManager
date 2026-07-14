@@ -140,75 +140,188 @@
         }
     }
 
-    /* ===== ПАРСЕР ЛОШАДИ (ТОЛЬКО ЧТЕНИЕ) ===== */
+        /* ===== ПАРСЕР ЛОШАДИ (ТОЛЬКО ЧТЕНИЕ) v0.2 — полный разбор ===== */
     class HorseParser {
         parse() {
             const text = this.normalize(document.body?.innerText || '');
             const name = this.getHorseName(text);
+            const sexInfo = this.getSex(text);
             const nextButton = this.findNextHorseButton();
             return {
-                id: this.getHorseId(), name,
+                id: this.getHorseId(),
+                name,
                 energy: this.getPercentNearLabel(text, 'Энергия'),
                 health: this.getPercentNearLabel(text, 'Здоровье'),
                 mood: this.getPercentNearLabel(text, 'Настроение') ?? this.getPercentNearLabel(text, 'Мораль'),
-                age: this.getAge(text), sex: this.getSex(text, name),
-                food: this.getFood(text), mission: this.getMission(text),
+                age: this.getAge(text),
+                ageStage: null, // заполним ниже
+                sex: sexInfo.label,
+                sexRaw: sexInfo.raw,
+                canBreed: sexInfo.canBreed,
+                breed: this.getField(text, 'Порода'),
+                species: this.getField(text, 'Виды'),
+                coat: this.getField(text, 'Масть'),
+                height: this.getField(text, 'Рост'),
+                weight: this.getField(text, 'Вес'),
+                birthDate: this.getField(text, 'Дата рождения'),
+                breeder: this.getField(text, 'Заводчик'),
+                skills: this.getSkills(text),
+                gp: this.getGP(text),
+                food: this.getFood(text),
+                mission: this.getMission(text),
                 hasNextHorseButton: Boolean(nextButton),
                 nextHorseButtonSelector: this.describeElement(nextButton),
                 pageTextSample: text.slice(0, 900),
             };
         }
+
         normalize(v) { return String(v || '').replace(/\s+/g, ' ').trim(); }
         getHorseId() { return new URLSearchParams(window.location.search).get('id') || null; }
+
         getHorseName(text) {
-            const title = document.title.replace(/\s*-\s*Ловади\s*$/i, '').replace(/\s*-\s*Howrse\s*$/i, '').trim();
-            if (title && !/^(lowadi|howrse|ловади)$/i.test(title)) return title;
+            const title = document.title.replace(/\s*[-–]\s*Ло[wв]ади\s*$/i, '').replace(/\s*[-–]\s*Howrse\s*$/i, '').trim();
+            if (title && !/^(lowadi|howrse|ло[wв]ади)$/i.test(title)) return title;
             for (const s of ['#characteristics-body-content h1', '.horse-name', '[class*="horse"] h1', 'h1', 'h2']) {
                 const c = this.normalize(document.querySelector(s)?.textContent || '');
                 if (c && c.length <= 80) return c;
             }
-            const m = text.match(/(?:Табун\s+[^\s]+\s+)?((?:жен|муж)\s+[0-9.,]+)/i);
-            return m ? m[1] : '—';
+            return '—';
         }
+
         getPercentNearLabel(text, label) {
             const e = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const d = text.match(new RegExp(`${e}\\s*(\\d{1,3})\\s*%`, 'i')); if (d) return Math.min(100, Number(d[1]));
             const r = text.match(new RegExp(`(\\d{1,3})\\s*%\\s*${e}`, 'i')); if (r) return Math.min(100, Number(r[1]));
             return null;
         }
+
+        // Универсальное чтение полей вида "Порода: Марвари", "Рост: 160 см"
+        getField(text, label) {
+            const e = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // ловим значение до следующего известного заголовка
+            const stop = 'Порода|Виды|Пол|Масть|Возраст|Рост|Вес|Дата рождения|Заводчик|Выигрыши|Навыки|Характеристики|Итог|Информация|Спутник|История';
+            const m = text.match(new RegExp(`${e}\\s*:?\\s*([^]*?)(?=\\s+(?:${stop})\\s*:|$)`, 'i'));
+            if (!m) return null;
+            let v = this.normalize(m[1]).replace(/^:+\s*/, '');
+            if (!v || v.length > 60) return null;
+            return v;
+        }
+
+        // Возраст: несколько часов / N месяцев / N год(а) / N лет / N лет N мес.
         getAge(text) {
-            const cands = [
-                text.match(/Возраст\s*:?\s*([^|]{1,35}?)(?= Пол| Энергия| Здоровье| Настроение|$)/i),
-                text.match(/(\d+\s*(?:год|года|лет)\s*(?:и\s*)?\d*\s*(?:месяц|месяца|месяцев)?)/i),
-                text.match(/(\d+\s*(?:месяц|месяца|месяцев))/i),
-            ];
-            for (const m of cands) { const v = this.normalize(m?.[1] || ''); if (v && !/смотреть страницу профиля|обучив/i.test(v)) return v; }
+            // 1) "N лет N мес." или "N год(а) N мес."
+            let m = text.match(/Возраст\s*:?\s*(\d+)\s*(?:лет|год[аов]?)\s*(\d+)\s*мес/i);
+            if (m) return `${m[1]} ${this.plural(+m[1], 'год', 'года', 'лет')} ${m[2]} мес.`;
+            // 2) "несколько часов"
+            if (/Возраст\s*:?\s*несколько\s+час/i.test(text)) return 'несколько часов';
+            // 3) "N месяц(ев)"
+            m = text.match(/Возраст\s*:?\s*(\d+)\s*месяц/i);
+            if (m) return `${m[1]} ${this.plural(+m[1], 'месяц', 'месяца', 'месяцев')}`;
+            // 4) "N лет" / "N год(а)"
+            m = text.match(/Возраст\s*:?\s*(\d+)\s*(?:лет|год[аов]?)/i);
+            if (m) return `${m[1]} ${this.plural(+m[1], 'год', 'года', 'лет')}`;
             return null;
         }
-        getSex(text, name) {
-            const s = `${name} ${text}`.toLowerCase();
-            if (/\bжен\b|кобыла|кобылиц/.test(s)) return 'Женский';
-            if (/\bмуж\b|жеребец|мерин/.test(s)) return 'Мужской';
-            return null;
+
+        plural(n, one, few, many) {
+            const n10 = n % 10, n100 = n % 100;
+            if (n10 === 1 && n100 !== 11) return one;
+            if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
+            return many;
         }
+
+        // Пол: кобыла=Ж, конь/жеребец=М, мерин=М но не размножается
+        getSex(text) {
+            const m = text.match(/Пол\s*:?\s*(кобыл[аы]|жеребец|конь|мерин|жеребёнок|жеребенок)/i);
+            const raw = m ? m[1].toLowerCase() : null;
+            if (raw) {
+                if (/кобыл/.test(raw)) return { label: 'Женский', raw, canBreed: true };
+                if (/мерин/.test(raw)) return { label: 'Мужской (мерин)', raw, canBreed: false };
+                return { label: 'Мужской', raw, canBreed: true };
+            }
+            // запасной вариант из имени
+            const s = text.toLowerCase();
+            if (/\bжен\b/.test(s)) return { label: 'Женский', raw: 'жен', canBreed: true };
+            if (/\bжер\b|\bмуж\b/.test(s)) return { label: 'Мужской', raw: 'жер', canBreed: true };
+            return { label: null, raw: null, canBreed: null };
+        }
+
+        // Навыки: Выносливость 1.6968 54.30, Скорость ...
+        getSkills(text) {
+            const names = ['Выносливость', 'Скорость', 'Выездка', 'Галоп', 'Рысь', 'Прыжки'];
+            const skills = {};
+            for (const name of names) {
+                const e = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const m = text.match(new RegExp(`${e}\\s+([\\d.,]+)\\s+([\\d.,]+)`, 'i'));
+                if (m) skills[name] = { level: parseFloat(m[1].replace(',', '.')), value: parseFloat(m[2].replace(',', '.')) };
+            }
+            const total = text.match(/Итог\s*:?\s*([\d.,]+)/i);
+            return { total: total ? parseFloat(total[1].replace(',', '.')) : null, list: skills };
+        }
+
+        // ГП (генетический потенциал) — пока пробуем достать по слову ГП/Бонусы
+        getGP(text) {
+            const m = text.match(/ГП\s*Бонусы\s*([^]*?)(?=Порода|$)/i);
+            return m ? this.normalize(m[1]).slice(0, 120) || null : null;
+        }
+
         getFood(text) {
             for (const p of [/Корм[а-я]*\s*:?\s*(\d+)\s*\/\s*(\d+)/i, /(\d+)\s*\/\s*(\d+)\s*Корм/i]) {
                 const m = text.match(p);
-                if (m) { const eaten = Number(m[1]), norm = Number(m[2]); return { eaten, norm, remaining: Math.max(0, norm - eaten), raw: `${eaten} / ${norm}` }; }
+                if (m) { const eaten = +m[1], norm = +m[2]; return { eaten, norm, remaining: Math.max(0, norm - eaten), raw: `${eaten} / ${norm}` }; }
             }
             return null;
         }
-        getMission(text) { const m = text.match(/Миссия\s*:?\s*([^|]{1,60}?)(?= Энергия| Здоровье| Настроение| Возраст|$)/i); return m ? this.normalize(m[1]) : null; }
+
+                // «Миссия» — это ЗАГОЛОВОК блока. Внутри — кнопка с названием задания
+        // (разное для разных КСК и видов лошади). Ищем и заголовок, и текст кнопки.
+        getMission(text) {
+            // 1) Пытаемся найти кнопку рядом с заголовком "Миссия" в самой вёрстке
+            const btnText = this.findMissionButtonText();
+            if (btnText) return btnText;
+            // 2) Запасной вариант — берём текст сразу после слова "Миссия" из общего текста
+            const m = text.match(/Миссия\s*:?\s*([^]{1,60}?)(?=\s+(?:Энергия|Здоровье|Настроение|Возраст|Порода|Виды|Навыки|Итог|Информация)|$)/i);
+            const found = m ? this.normalize(m[1]) : null;
+            return found && found.length > 1 ? found : null;
+        }
+
+        // Ищем блок с заголовком "Миссия" и достаём текст кнопки/ссылки внутри него
+        findMissionButtonText() {
+            const all = document.querySelectorAll('h1, h2, h3, h4, div, span, td, legend, caption');
+            for (const el of all) {
+                const t = this.normalize(el.textContent || '');
+                // сам заголовок должен быть коротким словом "Миссия"
+                if (/^Миссия$/i.test(t)) {
+                    // ищем кнопку/ссылку рядом: внутри родителя или у соседей
+                    const scope = el.parentElement || el;
+                    const btn = scope.querySelector('a, button, input[type="button"], input[type="submit"]');
+                    if (btn) {
+                        const label = this.normalize(btn.textContent || btn.value || btn.title || '');
+                        if (label && label.length <= 60) return label;
+                    }
+                    // если кнопка — следующий элемент
+                    const next = el.nextElementSibling;
+                    if (next) {
+                        const label = this.normalize(next.textContent || '');
+                        if (label && label.length <= 60 && !/^Миссия$/i.test(label)) return label;
+                    }
+                }
+            }
+            return null;
+        }
+
         findNextHorseButton() {
             const cands = [
-                ...document.querySelectorAll('a[href*="go=next"], button[onclick*="go=next"], input[onclick*="go=next"]'),
+                ...document.querySelectorAll('#nav-next, a[href*="go=next"], button[onclick*="go=next"], input[onclick*="go=next"]'),
                 ...document.querySelectorAll('a[href*="sens=suivant"], a[href*="next"], button[title*="след" i], a[title*="след" i]'),
                 ...document.querySelectorAll('button, a'),
             ];
+            const byId = document.querySelector('#nav-next'); if (byId) return byId;
             const byHref = cands.find((el) => /go=next|sens=suivant/i.test(el.getAttribute('href') || el.getAttribute('onclick') || '')); if (byHref) return byHref;
             const byText = cands.find((el) => /следующ|suivant|next/i.test(this.normalize(el.textContent || el.title || el.getAttribute('aria-label') || ''))); if (byText) return byText;
             return null;
         }
+
         describeElement(el) {
             if (!el) return null;
             if (el.id) return `#${el.id}`;
