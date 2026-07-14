@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Howrse Manager
 // @namespace    https://github.com/less-exe/HowrseManager
-// @version      0.1.2
+// @version      0.1.3
 // @description  Умный менеджер-ассистент для Ловади / Howrse. v0.1 MVP «Глаза»: анализ лошади и красивый интерфейс (без действий).
 // @author       less-exe
 // @match        https://www.lowadi.com/*
@@ -665,6 +665,20 @@
         background: linear-gradient(135deg, #7c5cff, #9d7bff); color: #fff; font-size: 26px; border: none; cursor: pointer;
         box-shadow: 0 12px 28px rgba(124,92,255,.5); z-index: 2147483000; display: grid; place-items: center; transition: .2s; }
     #${APP.id}-fab:hover { transform: scale(1.08); }
+
+.hm-sub-badge{display:flex;align-items:center;gap:8px;margin:8px 14px;padding:8px 12px;border-radius:12px;font-size:12px;font-weight:600;}
+.hm-sub-badge.active{background:rgba(124,92,246,.15);color:#c4b5fd;}
+.hm-sub-badge.inactive{background:rgba(239,68,68,.12);color:#fca5a5;}
+.hm-sub-dot{width:8px;height:8px;border-radius:50%;background:currentColor;}
+
+.hm-speed-hint{margin:-4px 0 10px;padding:10px 12px;border-radius:10px;background:rgba(124,92,246,.1);color:var(--accent2);font-size:12px;line-height:1.5;}
+
+.hm-faq-item{border:1px solid var(--border,rgba(255,255,255,.08));border-radius:12px;margin-bottom:8px;padding:0 14px;}
+.hm-faq-item summary{cursor:pointer;padding:12px 0;font-weight:600;list-style:none;}
+.hm-faq-item summary::-webkit-details-marker{display:none;}
+.hm-faq-item summary::before{content:'▸ ';color:var(--accent2);}
+.hm-faq-item[open] summary::before{content:'▾ ';}
+.hm-faq-item>div{padding:0 0 12px;font-size:13px;line-height:1.6;color:var(--muted);}
     `;
 
     // 👉 ПРОДОЛЖЕНИЕ В ЧАСТИ 3
@@ -711,7 +725,11 @@
                             <div class="hm-brand-logo">🐴</div>
                             <div><div class="hm-brand-name">${APP.name}</div><div class="hm-brand-ver">v${APP.version}</div></div>
                         </div>
-                        <nav class="hm-nav">${MENU.map((m) => `
+                        <div class="hm-sub-badge ${APP.subscription.active ? 'active' : 'inactive'}">
+                            <span class="hm-sub-dot"></span>
+                            <span>${APP.subscription.active ? APP.subscription.plan : 'Подписка неактивна'}</span>
+                        </div>
+                        <nav class="hm-nav">${this.visibleMenu().map((m) => `
                             <div class="hm-nav-item" data-section="${m.id}">
                                 <span class="hm-ic">${m.icon}</span><span>${m.label}</span>
                                 ${m.ready ? '' : '<span class="hm-lock">🔒</span>'}
@@ -798,6 +816,11 @@
             return `<div class="hm-empty"><div class="hm-empty-ic">${menu.icon}</div>
                 <div class="hm-empty-title">Раздел «${menu.label}»</div><div>${T.placeholder}</div></div>`;
         }
+                // Меню без пунктов "только для разработчика", если галочка выключена
+        visibleMenu() {
+            const devOn = this.settings.get('advanced', 'devMode') === true;
+            return MENU.filter((m) => !m.dev || devOn);
+        }
         // ГЛАВНАЯ
         renderHome() {
             return `
@@ -873,7 +896,13 @@
                         let control = '';
                         if (f.type === 'checkbox') control = `<div class="hm-switch ${val ? 'on' : ''}" data-set="${sec.id}.${f.id}" data-type="checkbox"></div>`;
                         else if (f.type === 'select') control = `<select data-set="${sec.id}.${f.id}" data-type="select">${f.options.map((o) => `<option value="${o.value}" ${o.value === val ? 'selected' : ''}>${o.label}</option>`).join('')}</select>`;
-                        return `<div class="hm-field"><span class="hm-field-lbl">${f.label}</span>${control}</div>`;
+                        // Для режима скорости добавляем описание под селектом
+                        let hint = '';
+                        if (sec.id === 'speed' && f.id === 'mode') {
+                            const mode = APP.speedModes[val] || APP.speedModes.safe;
+                            hint = `<div class="hm-speed-hint">${mode.desc}</div>`;
+                        }
+                        return `<div class="hm-field"><span class="hm-field-lbl">${f.label}</span>${control}</div>${hint}`;;
                     }).join('')}
                 </div>`).join('');
             return `${sections}<div class="hm-card"><div class="hm-controls"><button class="hm-btn danger" data-act="reset-settings">Сбросить настройки</button></div></div>`;
@@ -882,11 +911,22 @@
         renderAbout() {
             return `<div class="hm-card"><div class="hm-card-title">ℹ️ О проекте</div>
                 <div style="line-height:1.8;font-size:14px">
-                    <b>${APP.name}</b> v${APP.version}<br>
+                    <b>${APP.name}</b> v${APP.version} • ${APP.subscription.plan}<br>
                     Умный помощник для игры <b>Ловади</b>. 🐴<br><br>
-                    <span style="color:var(--muted)">Текущая версия — MVP «Глаза»: приложение учится правильно видеть данные лошади. Действия (кормление, уход, прогон) добавим на следующих шагах — аккуратно и по одному.</span><br><br>
-                    GitHub: <span style="color:var(--accent2)">less-exe/HowrseManager</span>
+                    <span style="color:var(--muted)">Заботится о твоих лошадках, экономит время и работает бережно — как настоящий игрок. 💜</span>
                 </div>
+            </div>
+            <div class="hm-card"><div class="hm-card-title">❓ Справка / FAQ</div>
+                <details class="hm-faq-item"><summary>С чего начать?</summary>
+                    <div>Открой карточку любой лошади и нажми «Старт» на Главной. В версии ${APP.version} приложение только читает данные — это безопасно.</div></details>
+                <details class="hm-faq-item"><summary>Это безопасно для аккаунта?</summary>
+                    <div>Да. В «Настройках» выбери режим скорости. Рекомендуем <b>🛡️ Безопасный</b> — приложение делает паузы, как живой человек. Для фона — <b>🌙 Ночной</b>.</div></details>
+                <details class="hm-faq-item"><summary>Данные куда-то отправляются?</summary>
+                    <div>Нет. Всё работает локально в твоём браузере. Настройки и лог хранятся только у тебя.</div></details>
+                <details class="hm-faq-item"><summary>Что-то не находится?</summary>
+                    <div>Включи в Настройках → «Для продвинутых» раздел «Разработчик», открой его на странице лошади, нажми «Обновить анализ» и «Скопировать отчёт» — пришли его разработчику. 😊</div></details>
+                <details class="hm-faq-item"><summary>Что дальше по функциям?</summary>
+                    <div>${APP.version} — Глаза (чтение) ✅ • далее: кормление, автопереход по табуну, полный уход, КСК, разведение, тренировки.</div></details>
             </div>
             <div class="hm-card"><div class="hm-card-title">🔒 Безопасность</div>
                 <div style="color:var(--muted);font-size:13.5px;line-height:1.7">Всё работает локально в твоём браузере. Никакие данные никуда не отправляются. Настройки хранятся только у тебя.</div>
@@ -904,6 +944,10 @@
                 <div class="hm-kv"><span class="hm-kv-k">Настроение</span>${horse.mood != null ? `<span class="hm-kv-v ok">${horse.mood}%</span>` : yn(false)}</div>
                 <div class="hm-kv"><span class="hm-kv-k">Возраст</span>${horse.age ? `<span class="hm-kv-v ok">${horse.age}</span>` : yn(false)}</div>
                 <div class="hm-kv"><span class="hm-kv-k">Пол</span>${horse.sex ? `<span class="hm-kv-v ok">${horse.sex}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Может размножаться</span>${horse.canBreed == null ? yn(false) : `<span class="hm-kv-v ok">${horse.canBreed ? 'Да' : 'Нет (мерин)'}</span>`}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Порода</span>${horse.breed ? `<span class="hm-kv-v ok">${horse.breed}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Масть</span>${horse.coat ? `<span class="hm-kv-v ok">${horse.coat}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Навыки (итог)</span>${horse.skills && horse.skills.total != null ? `<span class="hm-kv-v ok">${horse.skills.total}</span>` : yn(false)}</div>
                 <div class="hm-kv"><span class="hm-kv-k">Корм</span>${horse.food ? `<span class="hm-kv-v ok">${horse.food.raw} (не хватает ${horse.food.remaining})</span>` : yn(false)}</div>
                 <div class="hm-kv"><span class="hm-kv-k">Миссия/урок</span>${horse.mission ? `<span class="hm-kv-v ok">${horse.mission}</span>` : yn(false)}</div>
                 <div class="hm-kv"><span class="hm-kv-k">Кнопка «следующая»</span>${yn(horse.hasNextHorseButton)} <span class="hm-kv-v">${horse.nextHorseButtonSelector || ''}</span></div>
@@ -936,7 +980,7 @@
             content.querySelectorAll('[data-set]').forEach((el) => {
                 const [sec, field] = el.dataset.set.split('.');
                 if (el.dataset.type === 'checkbox') el.addEventListener('click', () => { const nv = !el.classList.contains('on'); el.classList.toggle('on', nv); this.settings.set(sec, field, nv); });
-                else if (el.dataset.type === 'select') el.addEventListener('change', () => this.settings.set(sec, field, el.value));
+                else if (el.dataset.type === 'select') el.addEventListener('change', () => { this.settings.set(sec, field, el.value); if (this.activeSection === 'settings') this.renderSection(); });
             });
             // Показать статус кнопки «следующая» на Прогоне
             const runNext = content.querySelector('[data-role="run-next"]');
