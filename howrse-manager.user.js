@@ -688,5 +688,374 @@
                             <div class="hm-title" data-role="title">🏠 Главная</div>
                             <div class="hm-header-actions">
                                 <button class="hm-icon-btn" data-role="theme" title="Сменить тему">🌙</button>
-                                <button class="hm-icon-btn
- 
+                                                                <button class="hm-icon-btn" data-role="minimize" title="Свернуть">—</button>
+                            </div>
+                        </header>
+                        <div class="hm-content" data-role="content"></div>
+                    </div>
+                </div>`;
+            document.body.appendChild(this.root);
+            this.root.querySelectorAll('.hm-nav-item').forEach((el) => {
+                el.addEventListener('click', () => { this.activeSection = el.dataset.section; this.storage.set('ui:section', this.activeSection); this.scoutResults = null; this.renderSection(); });
+            });
+            this.root.querySelector('[data-role="theme"]').addEventListener('click', () => this.toggleTheme());
+            this.root.querySelector('[data-role="minimize"]').addEventListener('click', () => this.setOpen(false));
+            this.enableDrag();
+        }
+        // ПРАВКА №12 — запоминаем позицию окна
+        enableDrag() {
+            let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+            const onDown = (e) => {
+                if (e.target.closest('button, input, select, .hm-nav-item')) return;
+                dragging = true; const rect = this.root.getBoundingClientRect();
+                sx = e.clientX; sy = e.clientY; ox = rect.left; oy = rect.top;
+                this.root.style.right = 'auto'; this.root.style.left = `${ox}px`; this.root.style.top = `${oy}px`;
+                e.preventDefault();
+            };
+            const onMove = (e) => { if (!dragging) return; this.root.style.left = `${ox + e.clientX - sx}px`; this.root.style.top = `${oy + e.clientY - sy}px`; };
+            const onUp = () => { if (!dragging) return; dragging = false; this.savePosition(); };
+            this.root.querySelectorAll('.hm-drag').forEach((el) => el.addEventListener('mousedown', onDown));
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
+        savePosition() {
+            const r = this.root.getBoundingClientRect();
+            this.storage.set('ui:pos', { left: r.left, top: r.top });
+        }
+        restorePosition() {
+            const p = this.storage.get('ui:pos', null);
+            if (p && typeof p.left === 'number') { this.root.style.right = 'auto'; this.root.style.left = `${p.left}px`; this.root.style.top = `${p.top}px`; }
+        }
+        setOpen(open) { this.isOpen = open; this.storage.set('ui:open', open); this.root.style.display = open ? 'flex' : 'none'; this.fab.style.display = open ? 'none' : 'grid'; }
+        applyTheme() {
+            let theme = this.settings.get('appearance', 'theme');
+            if (theme === 'auto') theme = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            this.root.setAttribute('data-theme', theme);
+            this.root.setAttribute('data-compact', String(Boolean(this.settings.get('appearance', 'compactMode'))));
+            const btn = this.root.querySelector('[data-role="theme"]'); if (btn) btn.textContent = theme === 'light' ? '☀️' : '🌙';
+        }
+        toggleTheme() { const cur = this.root.getAttribute('data-theme'); this.settings.set('appearance', 'theme', cur === 'light' ? 'dark' : 'light'); }
+        setActiveNav() {
+            this.root.querySelectorAll('.hm-nav-item').forEach((el) => el.classList.toggle('active', el.dataset.section === this.activeSection));
+            const menu = MENU.find((m) => m.id === this.activeSection);
+            if (menu) this.root.querySelector('[data-role="title"]').innerHTML = `${menu.icon} ${menu.label}`;
+        }
+        renderSection() {
+            this.setActiveNav();
+            const content = this.root.querySelector('[data-role="content"]');
+            const menu = MENU.find((m) => m.id === this.activeSection);
+            if (!menu.ready) { content.innerHTML = this.renderPlaceholder(menu); return; }
+            const renderers = {
+                home: () => this.renderHome(), run: () => this.renderRun(), stats: () => this.renderStats(),
+                settings: () => this.renderSettings(), about: () => this.renderAbout(), developer: () => this.renderDeveloper(),
+            };
+            content.innerHTML = (renderers[this.activeSection] || (() => this.renderPlaceholder(menu)))();
+            this.bindSectionEvents(); this.refreshDynamic(); this.refreshLog();
+        }
+        renderPlaceholder(menu) {
+            return `<div class="hm-empty"><div class="hm-empty-ic">${menu.icon}</div>
+                <div class="hm-empty-title">Раздел «${menu.label}»</div><div>${T.placeholder}</div></div>`;
+        }
+        // ГЛАВНАЯ — ПРАВКА №1: аккуратные плитки-строки
+        renderHome() {
+            return `
+            <div class="hm-grid2">
+                <div class="hm-card">
+                    <div class="hm-card-title">Состояние</div>
+                    <div class="hm-status-big" data-role="status-title">${T.statusTitle[AppStatus.IDLE]}</div>
+                    <div class="hm-status-sub" data-role="status-sub">Лошадь: — • Операция: Ожидание</div>
+                    <span class="hm-status-badge" data-role="status-badge">● Ожидание</span>
+                    <div class="hm-progress-head"><span>Прогресс</span><span class="hm-progress-pct" data-role="pct">0%</span></div>
+                    <div class="hm-progress-track"><div class="hm-progress-fill" data-role="fill"></div></div>
+                    <div class="hm-tiles">
+                        <div class="hm-tile"><span class="hm-tile-ic">📋</span><span class="hm-tile-num" data-role="t-left">0</span><span class="hm-tile-lbl">Осталось</span></div>
+                        <div class="hm-tile"><span class="hm-tile-ic">✅</span><span class="hm-tile-num" data-role="t-done">0</span><span class="hm-tile-lbl">Выполнено</span></div>
+                        <div class="hm-tile"><span class="hm-tile-ic">⏳</span><span class="hm-tile-num" data-role="t-proc">0</span><span class="hm-tile-lbl">В процессе</span></div>
+                    </div>
+                    <div class="hm-controls" style="margin-top:20px">
+                        <button class="hm-btn primary" data-act="start">Старт</button>
+                        <button class="hm-btn" data-act="pause">Пауза</button>
+                        <button class="hm-btn" data-act="resume">Продолжить</button>
+                        <button class="hm-btn danger" data-act="stop">Стоп</button>
+                        <button class="hm-btn ghost" data-act="soft">Остановить после текущей</button>
+                    </div>
+                </div>
+                <div class="hm-card">
+                    <div class="hm-card-title">👁️ Режим «Глаза» (v${APP.version})</div>
+                    <div style="color:var(--muted);font-size:13.5px;line-height:1.6">
+                        Сейчас приложение работает в безопасном режиме: <b style="color:var(--text)">только смотрит и записывает</b>, но <b style="color:var(--text)">ничего не нажимает</b> в игре.<br><br>
+                        Открой карточку лошади и нажми <b style="color:var(--accent2)">«Старт»</b> — я прочитаю её параметры и запишу в лог. 😊
+                    </div>
+                </div>
+            </div>
+            ${this.renderLogCard()}`;
+        }
+        renderRun() {
+            const info = this.adapter.getPageInfo();
+            return `
+            <div class="hm-card">
+                <div class="hm-card-title">🐴 Прогон табуна (чтение)</div>
+                <div style="color:var(--muted);font-size:13.5px;line-height:1.6;margin-bottom:16px">
+                    В версии ${APP.version} прогон <b style="color:var(--text)">только анализирует</b> текущую лошадь. Переходы и действия появятся позже.
+                </div>
+                <div class="hm-kv"><span class="hm-kv-k">Текущая страница</span><span class="hm-kv-v ${info.pageType === PageType.HORSE ? 'ok' : 'bad'}">${info.pageTypeLabel}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Кнопка «следующая»</span><span class="hm-kv-v" data-role="run-next">проверяется…</span></div>
+                <div class="hm-controls" style="margin-top:18px">
+                    <button class="hm-btn primary" data-act="analyze">Анализировать лошадь</button>
+                    <button class="hm-btn ghost" data-act="goto-dev">Открыть Разработчик</button>
+                </div>
+            </div>
+            ${this.renderLogCard()}`;
+        }
+        renderStats() {
+            const s = this.state.get();
+            return `<div class="hm-card"><div class="hm-card-title">📊 Статистика сессии</div>
+                <div class="hm-kv"><span class="hm-kv-k">Проанализировано лошадей</span><span class="hm-kv-v">${s.stats.analyzed}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Ошибок</span><span class="hm-kv-v ${s.stats.errors ? 'bad' : ''}">${s.stats.errors}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Последняя лошадь</span><span class="hm-kv-v">${s.currentHorseName}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Записей в логе</span><span class="hm-kv-v">${this.logger.all().length}</span></div>
+            </div>
+            <div class="hm-card"><div class="hm-card-title">Скоро здесь появится</div>
+                <div style="color:var(--muted);font-size:13.5px;line-height:1.6">Графики, история кормления, статистика по КСК и породам. ✨</div>
+            </div>`;
+        }
+        renderSettings() {
+            const sections = settingsSchema.map((sec) => `
+                <div class="hm-card"><div class="hm-card-title">${sec.title}</div>
+                    <div style="color:var(--muted);font-size:12.5px;margin-bottom:8px">${sec.description}</div>
+                    ${sec.fields.map((f) => {
+                        const val = this.settings.get(sec.id, f.id);
+                        let control = '';
+                        if (f.type === 'checkbox') control = `<div class="hm-switch ${val ? 'on' : ''}" data-set="${sec.id}.${f.id}" data-type="checkbox"></div>`;
+                        else if (f.type === 'select') control = `<select data-set="${sec.id}.${f.id}" data-type="select">${f.options.map((o) => `<option value="${o.value}" ${o.value === val ? 'selected' : ''}>${o.label}</option>`).join('')}</select>`;
+                        let hint = '';
+                        if (sec.id === 'speed' && f.id === 'mode') { const mode = APP.speedModes[val] || APP.speedModes.safe; hint = `<div class="hm-speed-hint">${mode.desc}</div>`; }
+                        return `<div class="hm-field"><span class="hm-field-lbl">${f.label}</span>${control}</div>${hint}`;
+                    }).join('')}
+                </div>`).join('');
+            return `${sections}<div class="hm-card"><div class="hm-controls"><button class="hm-btn danger" data-act="reset-settings">Сбросить настройки</button></div></div>`;
+        }
+        renderAbout() {
+            return `<div class="hm-card"><div class="hm-card-title">ℹ️ О проекте</div>
+                <div style="line-height:1.8;font-size:14px">
+                    <b>${APP.name}</b> v${APP.version} • ${APP.subscription.plan}<br>
+                    Умный помощник для игры <b>Ловади</b>. 🐴<br><br>
+                    <span style="color:var(--muted)">Заботится о твоих лошадках, экономит время и работает бережно — как настоящий игрок. 💜</span>
+                </div>
+            </div>
+            <div class="hm-card"><div class="hm-card-title">❓ Справка / FAQ</div>
+                <details class="hm-faq-item"><summary>С чего начать?</summary><div>Открой карточку любой лошади и нажми «Старт» на Главной. В версии ${APP.version} приложение только читает данные — это безопасно.</div></details>
+                <details class="hm-faq-item"><summary>Это безопасно для аккаунта?</summary><div>Да. В «Настройках» выбери режим скорости. Рекомендуем <b>🛡️ Безопасный</b>. Для фона — <b>🌙 Ночной</b>.</div></details>
+                <details class="hm-faq-item"><summary>Данные куда-то отправляются?</summary><div>Нет. Всё работает локально в твоём браузере.</div></details>
+                <details class="hm-faq-item"><summary>Что-то не находится?</summary><div>Включи Настройки → «Для продвинутых» → раздел «Разработчик», открой его на странице лошади и воспользуйся 🔎 Разведчиком — пришли отчёт разработчику. 😊</div></details>
+            </div>
+            <div class="hm-card"><div class="hm-card-title">🔒 Безопасность</div>
+                <div style="color:var(--muted);font-size:13.5px;line-height:1.7">Всё работает локально в твоём браузере. Никакие данные никуда не отправляются.</div>
+            </div>`;
+        }
+        // РАЗРАБОТЧИК + УНИВЕРСАЛЬНЫЙ РАЗВЕДЧИК
+        renderDeveloper() {
+            const info = this.adapter.getPageInfo();
+            const horse = info.pageType === PageType.HORSE ? this.adapter.analyzeHorse() : null;
+            const yn = (v) => v ? '<span class="hm-kv-v ok">✅ найдено</span>' : '<span class="hm-kv-v bad">❌ не найдено</span>';
+            const skillsBlock = (obj) => {
+                if (!obj) return yn(false);
+                if (obj.available === false) return `<span class="hm-kv-v bad">${obj.note || 'нет'}</span>`;
+                const list = obj.list || {};
+                const rows = Object.keys(list).map((k) => `${k}: ${list[k]}`).join(' • ');
+                return `<span class="hm-kv-v ok">${rows || '—'}${obj.total != null ? ' • Итог: ' + obj.total : ''}</span>`;
+            };
+            const horseRows = horse ? `
+                <div class="hm-kv"><span class="hm-kv-k">Имя</span>${yn(horse.name && horse.name !== '—')} <span class="hm-kv-v">${horse.name || ''}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Энергия</span>${horse.energy != null ? `<span class="hm-kv-v ok">${horse.energy}%</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Здоровье</span>${horse.health != null ? `<span class="hm-kv-v ok">${horse.health}%</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Настроение</span>${horse.mood != null ? `<span class="hm-kv-v ok">${horse.mood}%</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Возраст</span>${horse.age ? `<span class="hm-kv-v ok">${horse.age}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Пол</span>${horse.sex ? `<span class="hm-kv-v ok">${horse.sex}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Может размножаться</span>${horse.canBreed == null ? yn(false) : `<span class="hm-kv-v ok">${horse.canBreed ? 'Да' : 'Нет'}</span>`}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Вид</span>${horse.kind ? `<span class="hm-kv-v ok">${horse.kind}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Порода</span>${horse.breed ? `<span class="hm-kv-v ok">${horse.breed}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Масть</span>${horse.coat ? `<span class="hm-kv-v ok">${horse.coat}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Навыки</span>${skillsBlock(horse.skills)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">ГП (без клика)</span>${skillsBlock(horse.gp)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Корм</span>${horse.food ? `<span class="hm-kv-v ok">${horse.food.raw}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Миссия/урок</span>${horse.mission ? `<span class="hm-kv-v ok">${horse.mission}</span>` : yn(false)}</div>
+                <div class="hm-kv"><span class="hm-kv-k">Кнопка «следующая»</span>${yn(horse.hasNextHorseButton)} <span class="hm-kv-v">${horse.nextHorseButtonSelector || ''}</span></div>
+                <div style="margin-top:14px;color:var(--muted);font-size:12px">Образец текста страницы:</div>
+                <pre class="hm-pre">${(horse.pageTextSample || '').replace(/</g, '&lt;')}</pre>` : '<div style="color:var(--muted);font-size:13px;padding:8px 0">Открой карточку лошади, чтобы увидеть анализ данных. 🐴</div>';
+            // Блок разведчика
+            let scoutHtml = '';
+            if (this.scoutResults) {
+                if (this.scoutResults.length) {
+                    scoutHtml = this.scoutResults.map((r) => `<div class="hm-scout-hit">
+                        <span class="tag ${r.clickable ? 'click' : ''} ${r.hidden ? 'hidden' : ''}">${r.tag}${r.clickable ? ' 🖱' : ''}${r.hidden ? ' 👻' : ''}</span>
+                        <b>${(r.text || '').replace(/</g, '&lt;')}</b><br>
+                        селектор: <code>${r.selector}</code>${r.href ? `<br>href: ${r.href.slice(0, 60)}` : ''}${r.onclick ? `<br>onclick: ${r.onclick.replace(/</g, '&lt;')}` : ''}${r.attr ? `<br>${r.attr}` : ''}
+                    </div>`).join('');
+                } else scoutHtml = '<div style="color:var(--muted);font-size:13px">Ничего не нашлось по этому слову. Попробуй другое. 🤔</div>';
+            }
+            return `
+            <div class="hm-card">
+                <div class="hm-card-title">🧑‍💻 Диагностика страницы</div>
+                <div class="hm-kv"><span class="hm-kv-k">Адаптер</span><span class="hm-kv-v ${info.supported ? 'ok' : 'bad'}">${info.adapter} ${info.supported ? '(поддерживается)' : ''}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Тип страницы</span><span class="hm-kv-v">${info.pageTypeLabel}</span></div>
+                <div class="hm-kv"><span class="hm-kv-k">Адрес</span><span class="hm-kv-v" style="word-break:break-all">${info.url}</span></div>
+                <div class="hm-controls" style="margin-top:16px">
+                    <button class="hm-btn primary" data-act="dev-refresh">🔄 Обновить анализ</button>
+                    <button class="hm-btn" data-act="dev-copy">📋 Скопировать отчёт</button>
+                </div>
+            </div>
+            <div class="hm-card">
+                <div class="hm-card-title">🔎 Разведчик — универсальный поиск</div>
+                <div style="color:var(--muted);font-size:12.5px;line-height:1.6;margin-bottom:12px">
+                    Найдёт где угодно на странице: кнопки, ссылки, скрытые данные, атрибуты. Введи слово (например: <b style="color:var(--accent2)">морковь</b>, <b style="color:var(--accent2)">случить</b>, <b style="color:var(--accent2)">записать</b>, <b style="color:var(--accent2)">миссия</b>) и нажми поиск. 🕵️
+                </div>
+                <div class="hm-scout-row">
+                    <input type="text" data-role="scout-input" placeholder="Что ищем? например: корм">
+                    <button class="hm-btn primary" data-act="scout-search">Найти</button>
+                </div>
+                <div class="hm-controls" style="margin-bottom:12px">
+                    <button class="hm-btn" data-act="scout-gp">🔬 Сканировать ГП</button>
+                    <button class="hm-btn" data-act="scout-copy">📋 Скопировать находки</button>
+                </div>
+                <div>${scoutHtml}</div>
+            </div>
+            <div class="hm-card"><div class="hm-card-title">🐴 Что нашлось на карточке лошади</div>${horseRows}</div>
+            ${this.renderLogCard()}`;
+        }
+        renderLogCard() {
+            return `<div class="hm-card"><div class="hm-log-head"><div class="hm-card-title" style="margin:0">Лог</div>
+                <button class="hm-btn ghost" data-act="clear-log">Очистить</button></div>
+                <div class="hm-log" data-role="log"></div></div>`;
+        }
+        bindSectionEvents() {
+            const content = this.root.querySelector('[data-role="content"]');
+            content.querySelectorAll('[data-act]').forEach((el) => el.addEventListener('click', () => this.handleAction(el.dataset.act)));
+            content.querySelectorAll('[data-set]').forEach((el) => {
+                                const [sec, field] = el.dataset.set.split('.');
+                if (el.dataset.type === 'checkbox') {
+                    el.addEventListener('click', () => { const cur = this.settings.get(sec, field); this.settings.set(sec, field, !cur); this.renderSection(); });
+                } else if (el.dataset.type === 'select') {
+                    el.addEventListener('change', () => { this.settings.set(sec, field, el.value); this.renderSection(); });
+                }
+            });
+        }
+        handleAction(act) {
+            switch (act) {
+                case 'start': this.engine.start(); break;
+                case 'pause': this.engine.pause(); break;
+                case 'resume': this.engine.resume(); break;
+                case 'stop': this.engine.stop(); break;
+                case 'soft': this.engine.softStop(); break;
+                case 'analyze': this.engine.analyzeCurrent(); break;
+                case 'clear-log': this.logger.clear(); break;
+                case 'reset-settings': this.settings.reset(); this.renderSection(); this.logger.info('Настройки сброшены.'); break;
+                case 'goto-dev': this.activeSection = 'developer'; this.storage.set('ui:section', 'developer'); this.renderSection(); break;
+                case 'dev-refresh': this.renderSection(); this.logger.info('Анализ обновлён.'); break;
+                case 'dev-copy': this.copyDevReport(); break;
+                case 'scout-search': this.runScoutSearch(); break;
+                case 'scout-gp': this.runScoutGp(); break;
+                case 'scout-copy': this.copyScout(); break;
+            }
+        }
+        // 🔎 Разведчик — поиск по слову
+        runScoutSearch() {
+            const input = this.root.querySelector('[data-role="scout-input"]');
+            const q = input ? input.value.trim() : '';
+            if (!q) { this.logger.warn('Введи слово для поиска. 🔎'); return; }
+            this.scoutResults = this.adapter.universalSearch(q);
+            this.logger.success(`Разведчик: по слову «${q}» найдено ${this.scoutResults.length} совпадений.`);
+            this.renderSection();
+            this.root.querySelector('[data-role="scout-input"]').value = q;
+        }
+        // 🔬 Разведчик — скан ГП (детальный отчёт A–E)
+        runScoutGp() {
+            const report = this.adapter.scanHiddenData();
+            const flat = [];
+            report.forEach((r) => {
+                if (Array.isArray(r.value)) r.value.forEach((v) => flat.push({ tag: r.title, text: typeof v === 'string' ? v : JSON.stringify(v), selector: '(см. отчёт ГП)', clickable: false, hidden: false }));
+                else flat.push({ tag: r.title, text: String(r.value), selector: '(см. отчёт ГП)', clickable: false, hidden: false });
+            });
+            this.scoutResults = flat;
+            this._lastGpReport = report;
+            this.logger.success('🔬 Скан ГП завершён. Пришли отчёт разработчику!');
+            this.renderSection();
+        }
+        copyScout() {
+            let text = `=== Разведчик (${APP.name} v${APP.version}) ===\nURL: ${location.href}\n\n`;
+            if (this._lastGpReport) { this._lastGpReport.forEach((r) => { text += `## ${r.title}\n${JSON.stringify(r.value, null, 2)}\n\n`; }); }
+            if (this.scoutResults) this.scoutResults.forEach((r) => { text += `[${r.tag}] "${r.text}" → ${r.selector}${r.href ? ' href=' + r.href : ''}${r.onclick ? ' onclick=' + r.onclick : ''}${r.attr ? ' ' + r.attr : ''}\n`; });
+            this.copyToClipboard(text, 'Находки разведчика скопированы! 📋');
+        }
+        copyDevReport() {
+            const info = this.adapter.getPageInfo();
+            const horse = info.pageType === PageType.HORSE ? this.adapter.analyzeHorse() : null;
+            const text = `=== ${APP.name} v${APP.version} — отчёт ===\nURL: ${location.href}\nТип: ${info.pageTypeLabel}\n\nЛошадь:\n${JSON.stringify(horse, null, 2)}`;
+            this.copyToClipboard(text, 'Отчёт скопирован! Пришли его разработчику. 📋');
+        }
+        copyToClipboard(text, msg) {
+            try {
+                if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => this.logger.success(msg));
+                else { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); this.logger.success(msg); }
+            } catch (e) { this.logger.error('Не удалось скопировать: ' + e.message); }
+        }
+        // Динамическое обновление главной
+        refreshDynamic() {
+            const s = this.state.get();
+            const foot = this.root.querySelector('[data-role="foot-status"]');
+            if (foot) foot.textContent = T.statusTitle[s.status] || 'Готов к работе 😊';
+            const dot = this.root.querySelector('[data-role="dot"]');
+            if (dot) dot.style.background = s.status === AppStatus.ERROR ? 'var(--err)' : s.status === AppStatus.RUNNING ? 'var(--warn)' : 'var(--ok)';
+            const setText = (role, val) => { const el = this.root.querySelector(`[data-role="${role}"]`); if (el) el.textContent = val; };
+            setText('status-title', T.statusTitle[s.status] || '—');
+            setText('status-sub', `Лошадь: ${s.currentHorseName} • Операция: ${s.currentOperation}`);
+            setText('status-badge', `● ${s.currentOperation}`);
+            const total = s.progress.total || 0, cur = s.progress.current || 0;
+            const pct = total > 0 ? Math.min(100, Math.round((cur / total) * 100)) : 0;
+            setText('pct', pct + '%');
+            const fill = this.root.querySelector('[data-role="fill"]'); if (fill) fill.style.width = pct + '%';
+            setText('t-left', Math.max(0, total - cur));
+            setText('t-done', s.stats.analyzed || 0);
+            setText('t-proc', s.status === AppStatus.RUNNING ? 1 : 0);
+            // кнопка next на «Прогоне»
+            const runNext = this.root.querySelector('[data-role="run-next"]');
+            if (runNext) { const btn = this.adapter.findNextHorseButton(); runNext.innerHTML = btn ? `<span class="hm-kv-v ok">✅ ${btn.selector}</span>` : '<span class="hm-kv-v bad">❌ не найдено</span>'; }
+        }
+        refreshLog() {
+            const box = this.root.querySelector('[data-role="log"]');
+            if (!box) return;
+            const items = this.logger.all().slice(0, 60);
+            box.innerHTML = items.length ? items.map((it) => `<div class="hm-log-item ${it.level}"><span class="hm-log-time">${it.time}</span><span>${(it.message || '').replace(/</g, '&lt;')}</span></div>`).join('')
+                : '<div style="color:var(--muted);padding:8px">Лог пуст. Нажми «Старт» или «Анализировать». 😊</div>';
+        }
+    }
+
+    /* ===== ЗАПУСК ПРИЛОЖЕНИЯ ===== */
+    class App {
+        constructor() {
+            const eventBus = new EventBus();
+            const storage = new Storage(APP.storagePrefix + APP.version.split('.').slice(0, 2).join('_'));
+            const logger = new Logger(eventBus, storage);
+            const settings = new SettingsManager(eventBus, storage, settingsSchema);
+            const state = new StateManager(eventBus, storage);
+            const adapter = new LowadiAdapter({ logger });
+            const engine = new Engine({ eventBus, state, logger, settings, adapter });
+            const ui = new UIManager({ eventBus, state, settings, logger, engine, adapter, storage });
+            this.ctx = { eventBus, storage, logger, settings, state, adapter, engine, ui };
+        }
+        start() {
+            this.ctx.ui.init();
+            this.ctx.logger.info(`${APP.name} v${APP.version} запущен. Режим «Глаза» 👁️`);
+        }
+    }
+
+    function boot() {
+        if (window.__howrseManagerStarted) return;
+        window.__howrseManagerStarted = true;
+        try { new App().start(); }
+        catch (e) { console.error(`[${APP.name}] Ошибка запуска:`, e); }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+
+})();
